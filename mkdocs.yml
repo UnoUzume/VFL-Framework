@@ -1,0 +1,29 @@
+site_name: My VFL Project Docs
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.tabs
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          options:
+            show_source: true
+            show_root_heading: true
+            members_order: source
+            group_by_category: true
+            docstring_style: google
+            docstring_options:
+              ignore_init_summary: true
+            docstring_section_style: spacy
+            merge_init_into_class: true
+
+nav:
+  - 首页: index.md
+  - 核心架构 (Main): main.md
+  - 工具集 (Utils): utils.md

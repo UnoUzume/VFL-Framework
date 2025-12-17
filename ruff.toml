@@ -1,0 +1,57 @@
+indent-width = 2
+line-length = 100
+target-version = "py312"
+
+[format]
+docstring-code-format = true
+indent-style = "tab"
+line-ending = "lf"
+quote-style = "single"
+
+[lint]
+allowed-confusables = ["，", "！", "？", "；", "：", "（", "）"]
+select = [
+	"ALL",
+	"N804", # invalid-first-argument-name-for-class-method
+	"N805", # invalid-first-argument-name-for-method
+	"N807", # dunder-function-name
+	"N818", # error-suffix-on-exception-name
+	"N999", # invalid-module-name
+]
+ignore = [
+	"W191",    # Formatter: tab-indentation
+	"COM812",  # Formatter: missing-trailing-comma
+	"ISC001",  # Formatter: single-line-implicit-string-concatenation
+	"Q",       # Formatter: flake8-quotess
+	"N",       # pep8-naming
+	"D206",    # docstring-tab-indentation
+	"D415",    # missing-terminal-punctuation
+	"T20",     # flake8-print
+	"ERA",     # commented-out-code
+	"EXE",     # flake8-executable
+	"FBT",     #? flake8-boolean-trap 有用
+	"G004",    # logging-f-string
+	"RET504",  # unnecessary-assign
+	"SIM108",  # if-else-block-instead-of-if-exp
+	"PLR0402", # manual-from-impor
+	"PLR2004", # magic-value-comparison
+	"E402",    #? module-import-not-at-top-of-file
+	"F401",    #! unused-import: 请使用 Source Code Actions 手动移除未使用的导入
+	"S101",    #? assert: 需要注意
+	"TD003",   # missing-todo-link
+	"FIX002",  # line-contains-todo
+	"F722",    #: forward-annotation-syntax-error: jaxtyping
+	# "D",     # pydocstyle
+]
+# 注：ruff 不支持错误级别的设置
+# https://github.com/astral-sh/ruff/issues/1256
+
+[lint.isort]
+combine-as-imports = true
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.per-file-ignores]
+"examples/*" = ["INP001"]
+"projects/*" = ["INP001"]

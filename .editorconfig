@@ -1,0 +1,38 @@
+root = true
+
+[*]
+indent_style = tab
+indent_size = 2
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# YAML: 语法禁止 Tab，必须使用 Space
+[*.{yaml,yml}]
+indent_style = space
+
+# Markdown: 避免渲染不一致
+[*.md]
+indent_style = space
+indent_size = unset
+
+#! Python: PEP8 规范要求使用 Space，但是此处使用 Tab
+[*.py]
+indent_style = tab
+
+# Makefile: 语法强制 Tab
+[{Makefile,makefile,GNUmakefile}]
+indent_style = tab
+
+# Batch Scripts: cmd.exe 对 LF 支持极差，必须使用 CRLF
+[*.{bat,cmd}]
+end_of_line = crlf
+
+# Visual Studio Solution: 避免 IDE 自动转换造成的 diff
+[*.sln]
+end_of_line = crlf
+
+# PowerShell: 建议使用 CRLF 以保证最大兼容性 (可选)
+[*.{ps1,psm1,psd1}]
+end_of_line = crlf

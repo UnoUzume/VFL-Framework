@@ -1,0 +1,63 @@
+[project]
+name = "vfl-framework"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+	"beartype>=0.22.8",
+	"datasets>=4.4.1",
+	"jaxtyping>=0.3.3",
+	"kornia>=0.8.2",
+	"lightning>=2.6.0",
+	"matplotlib>=3.10.7",
+	"numpy>=2.3.5",
+	"scikit-learn>=1.8.0",
+	"scipy>=1.16.3",
+	"tensorboard>=2.20.0",
+	"torch>=2.9.1",
+	"torchvision>=0.24.1",
+]
+
+[dependency-groups]
+dev = [
+	"mkdocs>=1.6.1",
+	"mkdocs-material>=9.7.0",
+	"mkdocstrings[python]>=1.0.0",
+	"mypy>=1.19.1",
+]
+
+[tool.uv.sources]
+torch = [
+	{ index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+	{ index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.pyright]
+typeCheckingMode = "strict"
+deprecateTypingAliases = true
+reportMissingTypeStubs = false
+reportUnknownArgumentType = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnusedImport = "warning"
+#! pyright 可能与 mypy 不一致，因此不要开启此功能
+# reportUnnecessaryTypeIgnoreComment = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = false
+# namespace_packages = true
+
+[[tool.mypy.overrides]]
+module = ["torchvision.*"]
+# follow_imports = "silent"
+ignore_missing_imports = true
