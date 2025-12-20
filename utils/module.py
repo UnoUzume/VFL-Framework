@@ -5,10 +5,11 @@
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, override
 
 from main.module import DataModule
+from utils.vision import Transform, createTrans
 
 from . import define as de
 from .common import Path, tc
@@ -39,10 +40,10 @@ class DataConfig:
 	"""数据加载器工作进程数"""
 	fnCollate: Callable[[list[de.TUImageSample]], de.TUImageBatch] = collate
 	"""样本合并函数，将图像样本列表转换为批次数据"""
-	tfAugment: Callable[[de.TUImage], de.TFImage] | None = None
-	"""数据增强变换函数，应用于训练数据"""
-	tfNormal: Callable[[de.TUImage], de.TFImage] | None = None
-	"""数据常规变换函数，应用于验证和测试数据"""
+	lAugmentTrans: list[Transform] = field(default_factory=list)
+	"""数据增强变换列表，应用于训练数据"""
+	lNormalTrans: list[Transform] = field(default_factory=list)
+	"""数据常规变换列表，应用于验证和测试数据"""
 
 
 class DataHandler(Protocol):
@@ -92,22 +93,22 @@ class DataHandler(Protocol):
 		"""
 		...
 
-	def getAugmentTrans(self, nParty: int = 1) -> Callable[[de.TUImage], de.TFImage]:
-		"""获取数据增强变换函数。
+	def getAugmentTrans(self, nParty: int = 1) -> list[Transform]:
+		"""获取数据增强变换列表。
 
 		Args:
 			nParty: 参与方数量，用于调整增强策略（默认值为 `1`）
 
 		Returns:
-			数据增强变换函数，应用于训练数据
+			数据增强变换列表，应用于训练数据
 		"""
 		...
 
-	def getNormalTrans(self) -> Callable[[de.TUImage], de.TFImage]:
-		"""获取数据常规变换函数。
+	def getNormalTrans(self) -> list[Transform]:
+		"""获取数据常规变换列表。
 
 		Returns:
-			数据常规变换函数，应用于验证和测试数据
+			数据常规变换列表，应用于验证和测试数据
 		"""
 		...
 
@@ -130,20 +131,26 @@ class BaseDataModule(DataModule):
 		self.params: LoaderParams = {'num_workers': self.cfg.nWorkers, 'persistent_workers': True}
 		"""数据加载器参数"""
 
-		if self.cfg.tfAugment is not None:
-			self.tfAugment = self.cfg.tfAugment
-			"""数据增强变换函数，应用于训练数据"""
+		if self.cfg.lAugmentTrans:
+			self.lAugmentTrans = self.cfg.lAugmentTrans
+			"""数据增强变换列表，应用于训练数据"""
 		else:
-			self.tfAugment = self.hdlr.getAugmentTrans()
+			self.lAugmentTrans = self.hdlr.getAugmentTrans()
 
-		if self.cfg.tfNormal is not None:
-			self.tfNormal = self.cfg.tfNormal
-			"""数据常规变换函数，应用于验证和测试数据"""
+		self.tfAugment = createTrans(self.lAugmentTrans)
+		"""数据增强变换函数，应用于训练数据"""
+
+		if self.cfg.lNormalTrans:
+			self.lNormalTrans = self.cfg.lNormalTrans
+			"""数据常规变换列表，应用于验证和测试数据"""
 		else:
-			self.tfNormal = self.hdlr.getNormalTrans()
+			self.lNormalTrans = self.hdlr.getNormalTrans()
+
+		self.tfNormal = createTrans(self.lNormalTrans)
+		"""数据常规变换函数，应用于验证和测试数据"""
 
 	@property
-	def tfCurrent(self) -> Callable[[de.TUImage], de.TFImage]:
+	def tfCurrent(self) -> Transform:
 		"""当前应使用的数据变换函数"""
 		assert self.trainer
 		if self.trainer.training:
@@ -239,8 +246,9 @@ class SplitDataModule(BaseDataModule):
 		self.fnSplit = self.hdlr.getSplitFn()
 		"""数据分割函数"""
 
-		if self.cfg.tfAugment is None:
-			self.tfAugment = self.hdlr.getAugmentTrans(self.nParty)
+		if not self.cfg.lAugmentTrans:
+			self.lAugmentTrans = self.hdlr.getAugmentTrans(self.nParty)
+		self.tfAugment = createTrans(self.lAugmentTrans)
 
 	@override
 	def onAfterBatchTransfer(

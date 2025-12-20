@@ -15,7 +15,7 @@ from utils import define as de
 from utils.common import Path
 from utils.data import Dataset
 from utils.module import DataHandler
-from utils.vision import createTrans, tf
+from utils.vision import Transform, tf
 
 
 class BaseDataset(Dataset[de.TUImageSample]):
@@ -94,8 +94,8 @@ def splitImage(data: de.TUImages, nParty: int) -> list[de.TUImages]:
 
 
 @jaxtyped(typechecker=typechecker)
-def getAugmentTrans(nParty: int = 1) -> Callable[[de.TUImage], de.TFImage]:
-	"""创建数据增强变换函数。
+def getAugmentTrans(nParty: int = 1) -> list[Transform]:
+	"""创建数据增强变换列表。
 
 	根据参与方数量，创建适合不同图像尺寸的数据增强变换，
 	包括随机裁剪、水平翻转和颜色抖动。
@@ -104,16 +104,14 @@ def getAugmentTrans(nParty: int = 1) -> Callable[[de.TUImage], de.TFImage]:
 			nParty: 参与方数量，默认值为 `1`
 
 	Returns:
-			数据增强变换函数
+			数据增强变换列表
 	"""
 	lSize = [(160, 160), (160, 80), (160, 53), (80, 80)]
-	return createTrans(
-		[
-			tf.RandomCrop(lSize[nParty - 1], 15, padding_mode='reflect'),
-			tf.RandomHorizontalFlip(),
-			tf.ColorJitter(0.2, 0.2, 0.2),
-		]
-	)
+	return [
+		tf.RandomCrop(lSize[nParty - 1], 15, padding_mode='reflect'),
+		tf.RandomHorizontalFlip(),
+		tf.ColorJitter(0.2, 0.2, 0.2),
+	]
 
 
 class Handler(DataHandler):
@@ -140,9 +138,9 @@ class Handler(DataHandler):
 		return splitImage
 
 	@override
-	def getAugmentTrans(self, nParty: int = 1) -> Callable[[de.TUImage], de.TFImage]:
+	def getAugmentTrans(self, nParty: int = 1) -> list[Transform]:
 		return getAugmentTrans(nParty)
 
 	@override
-	def getNormalTrans(self) -> Callable[[de.TUImage], de.TFImage]:
-		return createTrans()
+	def getNormalTrans(self) -> list[Transform]:
+		return []
