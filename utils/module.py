@@ -9,11 +9,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, override
 
 from main.module import DataModule
-from utils.vision import Transform, createTrans
 
 from . import define as de
-from .common import Path, tc
+from .common import Path, nn, tc
 from .data import Dataset, TypedDataLoader, collate
+from .vision import Transform, createTrans
 
 if TYPE_CHECKING:
 	from .misc import LoaderParams
@@ -28,6 +28,7 @@ class DataConfig:
 		nBatchSize: 数据批次大小，默认值为 `32`
 		nWorkers: 数据加载器工作进程数，默认值为 `4`
 		fnCollate: 样本合并函数，将图像样本列表转换为批次数据，默认使用 `collate()` 函数
+		enableTrans: 是否启用自动数据变换，默认值为 `True`
 		tfAugment: 数据增强变换函数，应用于训练数据，_可选_
 		tfNormal: 数据常规变换函数，应用于验证和测试数据，_可选_
 	"""
@@ -40,6 +41,8 @@ class DataConfig:
 	"""数据加载器工作进程数"""
 	fnCollate: Callable[[list[de.TUImageSample]], de.TUImageBatch] = collate
 	"""样本合并函数，将图像样本列表转换为批次数据"""
+	enableTrans: bool = True
+	"""是否启用自动数据变换"""
 	lAugmentTrans: list[Transform] = field(default_factory=list)
 	"""数据增强变换列表，应用于训练数据"""
 	lNormalTrans: list[Transform] = field(default_factory=list)
@@ -152,6 +155,11 @@ class BaseDataModule(DataModule):
 	@property
 	def tfCurrent(self) -> Transform:
 		"""当前应使用的数据变换函数"""
+		# 如果禁用了自动数据变换，返回恒等变换
+		if not self.cfg.enableTrans:
+			return nn.Identity()
+
+		# 根据训练状态选择变换函数
 		assert self.trainer
 		if self.trainer.training:
 			return self.tfAugment
