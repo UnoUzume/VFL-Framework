@@ -89,10 +89,10 @@ class TFImageBatch(NamedTuple):
 
 
 @typechecker
-class TFSplitImageBatch(NamedTuple):
+class TSplitImageBatch(NamedTuple):
 	"""已分割、已处理的 PyTorch 图像批次。"""
 
-	image: list[TFImages]
+	image: list[TUImages | TFImages]
 	"""分割后的图像数据批次列表"""
 	label: Int64[tc.Tensor, ' b']
 	"""图像标签批次"""
@@ -130,7 +130,7 @@ class StepVars:
 		lTopInsGrad: 全局模型输入梯度，默认为空列表
 	"""
 
-	batch: TFSplitImageBatch
+	batch: TSplitImageBatch
 	"""已分割批次数据"""
 	iBatchIdx: int
 	"""批次索引"""

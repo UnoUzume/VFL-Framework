@@ -192,16 +192,6 @@ class BaseDataModule(DataModule):
 	def transferBatchToDevice(
 		self, batch: de.TUImageBatch, device: tc.device, dataloader_idx: int
 	) -> de.TUImageBatch:
-		"""将批次数据转移到指定设备。
-
-		Args:
-			batch: 批次数据，包含图像、标签和索引
-			device: 目标设备，如 `'cpu'` 或 `'cuda'`
-			dataloader_idx: 数据加载器索引，用于多数据加载器场景
-
-		Returns:
-			转移到目标设备后的批次数据
-		"""
 		[image, label, index] = batch
 		image = image.to(device)
 		label = label.to(device)
@@ -223,15 +213,6 @@ class TransDataModule(BaseDataModule):
 
 	@override
 	def onAfterBatchTransfer(self, batch: de.TUImageBatch, dataloader_idx: int) -> de.TFImageBatch:
-		"""批次数据转移后应用变换。
-
-		Args:
-			batch: 批次数据，包含图像、标签和索引
-			dataloader_idx: 数据加载器索引，用于多数据加载器场景
-
-		Returns:
-			应用变换后的批次数据
-		"""
 		[image, label, index] = batch
 		image = self.tfCurrent(image)
 		return de.TFImageBatch(image, label, index)
@@ -261,17 +242,17 @@ class SplitDataModule(BaseDataModule):
 	@override
 	def onAfterBatchTransfer(
 		self, batch: de.TUImageBatch, dataloader_idx: int
-	) -> de.TFSplitImageBatch:
-		"""批次数据转移后应用分割和变换。
-
-		Args:
-			batch: 批次数据，包含图像、标签和索引
-			dataloader_idx: 数据加载器索引，用于多数据加载器场景
-
-		Returns:
-			分割并应用变换后的批次数据
-		"""
+	) -> de.TSplitImageBatch:
 		[image, label, index] = batch
 		parts = self.fnSplit(image, self.nParty)
 		parts = [self.tfCurrent(part) for part in parts]
-		return de.TFSplitImageBatch(parts, label, index)
+		return de.TSplitImageBatch(parts, label, index)
+
+
+__all__ = [
+	'BaseDataModule',
+	'DataConfig',
+	'DataHandler',
+	'SplitDataModule',
+	'TransDataModule',
+]
