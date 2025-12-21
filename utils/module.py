@@ -5,14 +5,15 @@
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, override
 
 from main.module import DataModule
 
 from . import define as de
-from .common import Path, tc
+from .common import Path, nn, tc
 from .data import Dataset, TypedDataLoader, collate
+from .vision import Transform, createTrans
 
 if TYPE_CHECKING:
 	from .misc import LoaderParams
@@ -27,6 +28,7 @@ class DataConfig:
 		nBatchSize: 数据批次大小，默认值为 `32`
 		nWorkers: 数据加载器工作进程数，默认值为 `4`
 		fnCollate: 样本合并函数，将图像样本列表转换为批次数据，默认使用 `collate()` 函数
+		enableTrans: 是否启用自动数据变换，默认值为 `True`
 		tfAugment: 数据增强变换函数，应用于训练数据，_可选_
 		tfNormal: 数据常规变换函数，应用于验证和测试数据，_可选_
 	"""
@@ -39,10 +41,12 @@ class DataConfig:
 	"""数据加载器工作进程数"""
 	fnCollate: Callable[[list[de.TUImageSample]], de.TUImageBatch] = collate
 	"""样本合并函数，将图像样本列表转换为批次数据"""
-	tfAugment: Callable[[de.TUImage], de.TFImage] | None = None
-	"""数据增强变换函数，应用于训练数据"""
-	tfNormal: Callable[[de.TUImage], de.TFImage] | None = None
-	"""数据常规变换函数，应用于验证和测试数据"""
+	enableTrans: bool = True
+	"""是否启用自动数据变换"""
+	lAugmentTrans: list[Transform] = field(default_factory=list)
+	"""数据增强变换列表，应用于训练数据"""
+	lNormalTrans: list[Transform] = field(default_factory=list)
+	"""数据常规变换列表，应用于验证和测试数据"""
 
 
 class DataHandler(Protocol):
@@ -92,22 +96,22 @@ class DataHandler(Protocol):
 		"""
 		...
 
-	def getAugmentTrans(self, nParty: int = 1) -> Callable[[de.TUImage], de.TFImage]:
-		"""获取数据增强变换函数。
+	def getAugmentTrans(self, nParty: int = 1) -> list[Transform]:
+		"""获取数据增强变换列表。
 
 		Args:
 			nParty: 参与方数量，用于调整增强策略（默认值为 `1`）
 
 		Returns:
-			数据增强变换函数，应用于训练数据
+			数据增强变换列表，应用于训练数据
 		"""
 		...
 
-	def getNormalTrans(self) -> Callable[[de.TUImage], de.TFImage]:
-		"""获取数据常规变换函数。
+	def getNormalTrans(self) -> list[Transform]:
+		"""获取数据常规变换列表。
 
 		Returns:
-			数据常规变换函数，应用于验证和测试数据
+			数据常规变换列表，应用于验证和测试数据
 		"""
 		...
 
@@ -130,21 +134,32 @@ class BaseDataModule(DataModule):
 		self.params: LoaderParams = {'num_workers': self.cfg.nWorkers, 'persistent_workers': True}
 		"""数据加载器参数"""
 
-		if self.cfg.tfAugment is not None:
-			self.tfAugment = self.cfg.tfAugment
-			"""数据增强变换函数，应用于训练数据"""
+		if self.cfg.lAugmentTrans:
+			self.lAugmentTrans = self.cfg.lAugmentTrans
+			"""数据增强变换列表，应用于训练数据"""
 		else:
-			self.tfAugment = self.hdlr.getAugmentTrans()
+			self.lAugmentTrans = self.hdlr.getAugmentTrans()
 
-		if self.cfg.tfNormal is not None:
-			self.tfNormal = self.cfg.tfNormal
-			"""数据常规变换函数，应用于验证和测试数据"""
+		self.tfAugment = createTrans(self.lAugmentTrans)
+		"""数据增强变换函数，应用于训练数据"""
+
+		if self.cfg.lNormalTrans:
+			self.lNormalTrans = self.cfg.lNormalTrans
+			"""数据常规变换列表，应用于验证和测试数据"""
 		else:
-			self.tfNormal = self.hdlr.getNormalTrans()
+			self.lNormalTrans = self.hdlr.getNormalTrans()
+
+		self.tfNormal = createTrans(self.lNormalTrans)
+		"""数据常规变换函数，应用于验证和测试数据"""
 
 	@property
-	def tfCurrent(self) -> Callable[[de.TUImage], de.TFImage]:
+	def tfCurrent(self) -> Transform:
 		"""当前应使用的数据变换函数"""
+		# 如果禁用了自动数据变换，返回恒等变换
+		if not self.cfg.enableTrans:
+			return nn.Identity()
+
+		# 根据训练状态选择变换函数
 		assert self.trainer
 		if self.trainer.training:
 			return self.tfAugment
@@ -177,16 +192,6 @@ class BaseDataModule(DataModule):
 	def transferBatchToDevice(
 		self, batch: de.TUImageBatch, device: tc.device, dataloader_idx: int
 	) -> de.TUImageBatch:
-		"""将批次数据转移到指定设备。
-
-		Args:
-			batch: 批次数据，包含图像、标签和索引
-			device: 目标设备，如 `'cpu'` 或 `'cuda'`
-			dataloader_idx: 数据加载器索引，用于多数据加载器场景
-
-		Returns:
-			转移到目标设备后的批次数据
-		"""
 		[image, label, index] = batch
 		image = image.to(device)
 		label = label.to(device)
@@ -208,15 +213,6 @@ class TransDataModule(BaseDataModule):
 
 	@override
 	def onAfterBatchTransfer(self, batch: de.TUImageBatch, dataloader_idx: int) -> de.TFImageBatch:
-		"""批次数据转移后应用变换。
-
-		Args:
-			batch: 批次数据，包含图像、标签和索引
-			dataloader_idx: 数据加载器索引，用于多数据加载器场景
-
-		Returns:
-			应用变换后的批次数据
-		"""
 		[image, label, index] = batch
 		image = self.tfCurrent(image)
 		return de.TFImageBatch(image, label, index)
@@ -239,23 +235,24 @@ class SplitDataModule(BaseDataModule):
 		self.fnSplit = self.hdlr.getSplitFn()
 		"""数据分割函数"""
 
-		if self.cfg.tfAugment is None:
-			self.tfAugment = self.hdlr.getAugmentTrans(self.nParty)
+		if not self.cfg.lAugmentTrans:
+			self.lAugmentTrans = self.hdlr.getAugmentTrans(self.nParty)
+		self.tfAugment = createTrans(self.lAugmentTrans)
 
 	@override
 	def onAfterBatchTransfer(
 		self, batch: de.TUImageBatch, dataloader_idx: int
-	) -> de.TFSplitImageBatch:
-		"""批次数据转移后应用分割和变换。
-
-		Args:
-			batch: 批次数据，包含图像、标签和索引
-			dataloader_idx: 数据加载器索引，用于多数据加载器场景
-
-		Returns:
-			分割并应用变换后的批次数据
-		"""
+	) -> de.TSplitImageBatch:
 		[image, label, index] = batch
 		parts = self.fnSplit(image, self.nParty)
 		parts = [self.tfCurrent(part) for part in parts]
-		return de.TFSplitImageBatch(parts, label, index)
+		return de.TSplitImageBatch(parts, label, index)
+
+
+__all__ = [
+	'BaseDataModule',
+	'DataConfig',
+	'DataHandler',
+	'SplitDataModule',
+	'TransDataModule',
+]

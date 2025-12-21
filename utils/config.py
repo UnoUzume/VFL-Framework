@@ -59,7 +59,15 @@ def init(seed: int = 0x0721) -> None:
 	print(f'随机种子设置为：{SEED:#06x}')
 
 	# 添加白名单
-	tc.serialization.add_safe_globals([types.SimpleNamespace])
+	tc.serialization.add_safe_globals(
+		[
+			types.SimpleNamespace,
+			np.ndarray,
+			np.dtype,
+			np.dtypes.Int64DType,
+			np._core.multiarray._reconstruct,  # type: ignore[attr-defined]  # noqa: SLF001
+		]
+	)
 
 	# 配置日志过滤
 	logging.getLogger('lightning.pytorch.utilities.rank_zero').addFilter(IgnorePLFilter())
@@ -97,3 +105,6 @@ def getCallbacks() -> list[Callback]:
 
 	#! 注意：`validate(ckpt_path="best")` 仅考虑第一个 `ModelCheckpoint`
 	return [cbCkptAcc, cbCkptEpoch, cbLRMonitor]
+
+
+__all__ = ['getCallbacks', 'init', 'rng']

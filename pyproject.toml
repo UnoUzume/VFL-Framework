@@ -55,6 +55,7 @@ reportUnusedImport = "warning"
 python_version = "3.12"
 strict = true
 warn_return_any = false
+disallow_subclassing_any = false
 # namespace_packages = true
 
 [[tool.mypy.overrides]]
