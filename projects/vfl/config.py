@@ -1,0 +1,166 @@
+"""VFL 框架配置模块，定义了模型、运行和应用的配置结构
+
+本模块提供了纵向联邦学习所需的各类配置对象，包括模型结构、训练参数和应用设置。
+"""
+
+import sys
+from collections.abc import Callable
+from dataclasses import InitVar, dataclass, field
+
+import __main__
+from models.fcn import FCN
+from models.resnet import ResNet18
+from utils.common import Path, nn
+from utils.module import DataConfig
+
+
+def _getAppName() -> str | None:
+	"""尝试获取当前模块/应用名。
+
+	优先通过 `__package__` 获取（适用于 `python -m projects.xxx.main` 方式运行），
+	若不可用则尝试通过物理路径推断。无法获取时返回 `None`。
+
+	Returns:
+		当前模块/应用名，如果无法确定则返回 `None`
+	"""
+	# 1. 优先尝试：通过 __package__ (适用于 python -m projects.xxx.main)
+	pkg = getattr(__main__, '__package__', None)
+	if pkg and isinstance(pkg, str):
+		return pkg.split('.')[-1]
+
+	# 2. 补救方案：如果不是 -m 启动，尝试通过物理路径推断
+	if not sys.argv or not sys.argv[0]:
+		return None
+
+	fpEntry = Path(sys.argv[0]).resolve()
+	if fpEntry.suffix != '.py':
+		return None
+
+	return fpEntry.parent.name
+
+
+def getAppName() -> str:
+	"""获取当前运行的应用名称。
+
+	如果无法确定应用名称，将抛出 `RuntimeError` 异常。
+
+	Returns:
+		当前运行的应用名称
+
+	Raises:
+		RuntimeError: 当无法确定当前运行入口名称时抛出
+	"""
+	name = _getAppName()
+	if not name:
+		msg = (
+			'无法确定当前的运行入口名称 (App Name)。'
+			"请确保你是通过 'python -m projects.xxx.main' 或标准文件路径方式运行。"
+		)
+		raise RuntimeError(msg)
+	return name
+
+
+@dataclass
+class ModelConfig:
+	"""纵向联邦学习模型配置类，定义了底端网络和顶端网络的配置参数
+
+	Args:
+		lPartyDims: 各参与方输入数据的维度列表
+		lTopDims: 顶端网络各层的维度列表
+		_getBtmNets: 获取底端网络的回调函数，_可选_
+		_getTopNet: 获取顶端网络的回调函数，_可选_
+	"""
+
+	lPartyDims: list[int]
+	"""各参与方输入数据的维度列表"""
+	lTopDims: list[int]
+	"""顶端网络各层的维度列表"""
+	_getBtmNets: Callable[[], nn.ModuleList] | None = None
+	"""获取底端网络的回调函数，_可选_"""
+	_getTopNet: Callable[[], nn.Module] | None = None
+	"""获取顶端网络的回调函数，_可选_"""
+
+	def getBtmNets(self) -> nn.ModuleList:
+		"""获取各参与方的底端网络列表。
+
+		如果 `_getBtmNets` 回调函数被提供，则调用该函数获取网络；
+		否则，使用默认的 `ResNet18` 构建网络列表。
+
+		Returns:
+			各参与方的底端网络模块列表
+		"""
+		if self._getBtmNets:
+			return self._getBtmNets()
+		return nn.ModuleList([ResNet18(dim) for dim in self.lPartyDims])
+
+	def getTopNet(self) -> nn.Module:
+		"""获取顶端网络。
+
+		如果 `_getTopNet` 回调函数被提供，则调用该函数获取网络；
+		否则，使用默认的 `FCN` 构建顶端网络。
+
+		Returns:
+			顶端网络模块
+		"""
+		if self._getTopNet:
+			return self._getTopNet()
+		return FCN(self.lTopDims)
+
+
+@dataclass
+class RunConfig:
+	"""训练运行配置类，定义了学习率、训练轮数等超参数
+
+	Args:
+		lr: 学习率，默认为 `1e-3`
+		epochs: 训练轮数，默认为 `40`
+	"""
+
+	lr: float = 1e-3
+	"""学习率，默认为 `1e-3`"""
+	epochs: int = 40
+	"""训练轮数，默认为 `40`"""
+
+
+@dataclass
+class AppConfig:
+	"""应用主配置类，整合了数据、模型和运行配置
+
+	Args:
+		data: 数据配置对象
+		model: 模型配置对象
+		run: 运行配置对象
+		sName: 应用名称，默认通过 `getAppName()` 获取
+		dpRoot: 日志根目录，_初始化后只读_
+		_dpRoot: 内部初始化用参数，指定日志根目录，_可选_
+		fpCkpt: 检查点文件路径，_可选_
+	"""
+
+	data: DataConfig
+	"""数据配置对象"""
+	model: ModelConfig
+	"""模型配置对象"""
+	run: RunConfig
+	"""运行配置对象"""
+	sName: str = field(default_factory=getAppName)
+	"""应用名称，默认通过 `getAppName()` 获取"""
+	dpRoot: Path = field(init=False)
+	"""日志根目录，_初始化后只读_"""
+	_dpRoot: InitVar[Path | None] = None
+	"""内部初始化用参数，指定日志根目录，_可选_"""
+	fpCkpt: str | None = None
+	"""检查点文件路径，_可选_"""
+
+	def __post_init__(self, _dpRoot: Path | None) -> None:
+		"""初始化实例。"""
+		self.dpRoot = _dpRoot or Path('data/logs') / f'{self.sName}_{self.data.sName}'
+
+	def getRunName(self) -> str:
+		"""生成唯一的实验运行名称。
+
+		Returns:
+			基于应用名、数据集名、参与方数量和网络层数构建的运行名称
+		"""
+		return (
+			f'{self.sName}_{self.data.sName}_P{len(self.model.lPartyDims)}L{len(self.model.lTopDims) - 1}'
+		)
