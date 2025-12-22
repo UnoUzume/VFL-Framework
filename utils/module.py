@@ -4,8 +4,9 @@
 主要用于构建和管理深度学习任务中的数据流程。
 """
 
+import importlib
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, override
 
 from main.module import DataModule
@@ -24,28 +25,31 @@ class DataConfig:
 	"""数据配置类，用于配置数据集和数据加载器的参数。
 
 	Args:
-		dpData: 数据集存储路径
+		sName: 数据集名称
 		nBatchSize: 数据批次大小，默认值为 `32`
 		nWorkers: 数据加载器工作进程数，默认值为 `4`
+		dpData: 数据集存储路径，默认使用数据处理模块的默认路径
 		fnCollate: 样本合并函数，将图像样本列表转换为批次数据，默认使用 `collate()` 函数
 		enableTrans: 是否启用自动数据变换，默认值为 `True`
 		tfAugment: 数据增强变换函数，应用于训练数据，_可选_
 		tfNormal: 数据常规变换函数，应用于验证和测试数据，_可选_
 	"""
 
-	dpData: Path
-	"""数据集存储路径"""
+	sName: str
+	"""数据集名称"""
 	nBatchSize: int = 32
 	"""数据批次大小"""
 	nWorkers: int = 4
 	"""数据加载器工作进程数"""
+	dpData: Path | None = None
+	"""数据集存储路径"""
 	fnCollate: Callable[[list[de.TUImageSample]], de.TUImageBatch] = collate
 	"""样本合并函数，将图像样本列表转换为批次数据"""
 	enableTrans: bool = True
 	"""是否启用自动数据变换"""
-	lAugmentTrans: list[Transform] = field(default_factory=list)
+	lAugmentTrans: list[Transform] | None = None
 	"""数据增强变换列表，应用于训练数据"""
-	lNormalTrans: list[Transform] = field(default_factory=list)
+	lNormalTrans: list[Transform] | None = None
 	"""数据常规变换列表，应用于验证和测试数据"""
 
 
@@ -55,6 +59,11 @@ class DataHandler(Protocol):
 	该协议规范了数据集的准备、获取、分割和数据变换等核心操作，
 	确保不同数据集实现具有一致的接口，便于在数据模块中统一使用。
 	"""
+
+	@property
+	def dpPath(self) -> Path:
+		"""数据集存储路径"""
+		...
 
 	def prepare(self, dpData: Path) -> None:
 		"""准备数据集，如下载、解压、预处理等操作。
@@ -116,10 +125,27 @@ class DataHandler(Protocol):
 		...
 
 
+def getHandler(name: str) -> DataHandler:
+	"""根据数据集名称，动态加载对应的模块，并提取 'Handler' 类。"""
+	try:
+		module = importlib.import_module(f'modules.{name}')
+	except ImportError as err:
+		msg = f'找不到数据集文件：modules/{name}.py'
+		raise ImportError(msg) from err
+
+	try:
+		handler = module.Handler
+	except AttributeError as err:
+		msg = f"文件 {name}.py 中未定义 'Handler' 类"
+		raise AttributeError(msg) from err
+
+	return handler()
+
+
 class BaseDataModule(DataModule):
 	"""基础数据模块类，用于管理数据集和数据加载器。"""
 
-	def __init__(self, config: DataConfig, handler: DataHandler) -> None:
+	def __init__(self, config: DataConfig, handler: DataHandler | None = None) -> None:
 		"""初始化实例。
 
 		Args:
@@ -129,12 +155,15 @@ class BaseDataModule(DataModule):
 		super().__init__()
 		self.cfg = config
 		"""数据配置对象"""
-		self.hdlr = handler
+		self.hdlr = handler or getHandler(self.cfg.sName)
 		"""数据处理器"""
 		self.params: LoaderParams = {'num_workers': self.cfg.nWorkers, 'persistent_workers': True}
 		"""数据加载器参数"""
 
-		if self.cfg.lAugmentTrans:
+		self.dpData = self.cfg.dpData or self.hdlr.dpPath
+		"""数据集存储路径"""
+
+		if self.cfg.lAugmentTrans is not None:
 			self.lAugmentTrans = self.cfg.lAugmentTrans
 			"""数据增强变换列表，应用于训练数据"""
 		else:
@@ -143,7 +172,7 @@ class BaseDataModule(DataModule):
 		self.tfAugment = createTrans(self.lAugmentTrans)
 		"""数据增强变换函数，应用于训练数据"""
 
-		if self.cfg.lNormalTrans:
+		if self.cfg.lNormalTrans is not None:
 			self.lNormalTrans = self.cfg.lNormalTrans
 			"""数据常规变换列表，应用于验证和测试数据"""
 		else:
@@ -167,13 +196,13 @@ class BaseDataModule(DataModule):
 
 	@override
 	def prepare(self) -> None:
-		self.hdlr.prepare(self.cfg.dpData)
+		self.hdlr.prepare(self.dpData)
 
 	@override
 	def setup(self, stage: str) -> None:
-		self.dsTrain = self.hdlr.getTrainDataset(self.cfg.dpData)
+		self.dsTrain = self.hdlr.getTrainDataset(self.dpData)
 		"""训练数据集实例"""
-		self.dsVal = self.hdlr.getValDataset(self.cfg.dpData)
+		self.dsVal = self.hdlr.getValDataset(self.dpData)
 		"""验证数据集实例"""
 
 	@override
@@ -202,7 +231,7 @@ class BaseDataModule(DataModule):
 class TransDataModule(BaseDataModule):
 	"""数据变换模块类，用于在批次数据转移后应用变换"""
 
-	def __init__(self, config: DataConfig, handler: DataHandler) -> None:
+	def __init__(self, config: DataConfig, handler: DataHandler | None = None) -> None:
 		"""初始化实例。
 
 		Args:
@@ -221,7 +250,7 @@ class TransDataModule(BaseDataModule):
 class SplitDataModule(BaseDataModule):
 	"""数据分割模块类，用于在联邦学习场景下分割图像数据"""
 
-	def __init__(self, nParty: int, config: DataConfig, handler: DataHandler) -> None:
+	def __init__(self, nParty: int, config: DataConfig, handler: DataHandler | None = None) -> None:
 		"""初始化实例。
 
 		Args:

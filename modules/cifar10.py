@@ -122,6 +122,11 @@ class Handler(DataHandler):
 	继承自 `DataHandler` 类，提供了 CIFAR-10 数据集的准备、加载和变换功能。
 	"""
 
+	@property
+	@override
+	def dpPath(self) -> Path:
+		return Path('data/datasets/cifar10')
+
 	@override
 	def prepare(self, dpData: Path) -> None:
 		CIFAR10(dpData, True, download=True)

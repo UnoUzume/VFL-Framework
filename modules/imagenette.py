@@ -120,6 +120,11 @@ class Handler(DataHandler):
 	继承自 `DataHandler` 类，提供了 Imagenette 数据集的准备、加载和变换功能。
 	"""
 
+	@property
+	@override
+	def dpPath(self) -> Path:
+		return Path('data/datasets/imagenette')
+
 	@override
 	def prepare(self, dpData: Path) -> None:
 		Imagenette(dpData, 'train', '160px', download=True)
