@@ -6,38 +6,15 @@
 
 from typing import Any, override
 
-from torch.optim import Adam, Optimizer, lr_scheduler as lr
-from torchvision import models
+from torch.optim import Optimizer, lr_scheduler as lr
 
 from main.arch import BaseVFLArch
 from main.callback import VFLCallback
-from models.fcn import FCN
-from utils.common import Path, copy, nn, np, tc
+from utils.common import copy, np, tc
 from utils.config import rng
 from utils.define import StepVars
 from utils.misc import accuracy
-from utils.module import BaseDataModule
 from utils.vision import createPostTrans, createSpatialTrans, tf
-
-
-class LocalModel(nn.Module):
-	"""本地模型类，用于垂直联邦学习中的各参与方
-
-	该类基于 ResNet-18 构建本地模型网络，负责处理本地数据并提取特征。
-	"""
-
-	def __init__(self, nOutDim: int) -> None:
-		"""初始化本地模型。
-
-		Args:
-			nOutDim: 输出维度，即特征向量的长度
-		"""
-		super().__init__()
-		self.net = models.resnet18(num_classes=nOutDim)
-
-	@override
-	def forward(self, ins: tc.Tensor) -> tc.Tensor:
-		return self.net(ins)
 
 
 def createLRScheduler(optimizer: Optimizer) -> lr.LRScheduler:
@@ -92,55 +69,15 @@ class AddTrigger(tf.Transform):
 		return None
 
 
-class LFBAArch(BaseVFLArch):
+class LFBACb(VFLCallback):
 	"""LFBA 架构实现类
 
-	实现 LFBA 攻击的垂直联邦学习架构，包括模型训练、验证和攻击逻辑。
+	实现 LFBA 攻击的纵向联邦学习架构，包括模型训练、验证和攻击逻辑。
 	"""
 
-	def __init__(
-		self,
-		module: BaseDataModule,
-		dpRoot: Path | str,
-		lPartyDims: list[int],
-		lTopDims: list[int],
-		lCallbacks: list[VFLCallback] | None = None,
-	) -> None:
-		"""初始化实例。
-
-		Args:
-			module: 数据模块，提供训练和验证数据
-			dpRoot: 日志和检查点保存根目录
-			lPartyDims: 各参与方的输出维度列表
-			lTopDims: 顶层网络的维度列表
-			lCallbacks: 回调函数列表，_可选_
-		"""
-		super().__init__(dpRoot, lCallbacks)
-		self.logText.info('LFBAArch.__init__()')
-
-		self.lPartyDims = lPartyDims
-		self.lTopDims = lTopDims
-		self.module = module
-
-		# 必要属性
-		self.lBtmNets = nn.ModuleList([LocalModel(dim) for dim in lPartyDims])  #! 可变
-		self.zTopNet = FCN(lTopDims, True, 'relu')
-
-		# 数据转换
-		self.tfNormal = createSpatialTrans(module.lNormalTrans)
-		self.tfAugment = createSpatialTrans(module.lAugmentTrans)
-		self.tfTrigger = AddTrigger()
-		self.tfPost = createPostTrans()
-
 	@override
-	def onConfigOptims(self, iOpt: int, iLRS: int) -> tuple[list[Optimizer], list[lr.LRScheduler]]:
-		LR = 1e-3
-		optBtms = [Adam(net.parameters(), LR) for net in self.lBtmNets]
-		optTop = Adam(self.zTopNet.parameters(), LR)
-
-		lrsBtms = [createLRScheduler(opt) for opt in optBtms]
-		lrsTop = createLRScheduler(optTop)
-		return [*optBtms, optTop], [*lrsBtms, lrsTop]
+	def onInitModule(self, m: BaseVFLArch) -> None:
+		m.logText.info(f'{self.__class__.__name__}.onInitModule()')
 
 	# ============
 	# 训练阶段
@@ -148,21 +85,23 @@ class LFBAArch(BaseVFLArch):
 
 	@override
 	def onFitStart(self, m: BaseVFLArch) -> None:
-		self.logText.info(self.trainer.log_dir)
+		m.logText.info(m.trainer.log_dir)
 
-	@override
-	def onTrainStepVars(self, m: BaseVFLArch, v: StepVars) -> None:
-		[v.images, v.labels, v.indices] = v.batch
+		# 数据转换
+		self.tfNormal = createSpatialTrans(m.module.lNormalTrans)
+		self.tfAugment = createSpatialTrans(m.module.lAugmentTrans)
+		self.tfTrigger = AddTrigger()
+		self.tfPost = createPostTrans()
 
 	@override
 	def onTrainBtmIns(self, m: 'BaseVFLArch', v: StepVars) -> None:
 		v.lBtmIns = [self.tfAugment(images) for images in v.lBtmIns]
 
-		if self.current_epoch >= 1:
+		if m.current_epoch >= 1:
 			# 获取当前批次中投毒目的样本、非目标类样本的位置（索引的索引）
 			aBatchIdxs = v.indices.cpu().numpy()
-			aDstPos = np.flatnonzero(np.isin(aBatchIdxs, self.ns.aDstIdxs))  #: aBatchIdxs_DstPos
-			aNonPos = np.flatnonzero(np.isin(aBatchIdxs, self.ns.aNonIdxs))  #: aBatchIdxs_NonPos
+			aDstPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aDstIdxs))  #: aBatchIdxs_DstPos
+			aNonPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aNonIdxs))  #: aBatchIdxs_NonPos
 
 			if len(aDstPos) > 0 and len(aNonPos) > 0:  # 如果找到投毒目标
 				aSrcPos = rng().choice(aNonPos, len(aDstPos), len(aNonPos) < len(aDstPos))
@@ -171,19 +110,12 @@ class LFBAArch(BaseVFLArch):
 
 		v.lBtmIns = [self.tfPost(images) for images in v.lBtmIns]
 
-	@override
-	def onTrainLoss(self, m: BaseVFLArch, v: StepVars) -> None:
-		self.logDict({'loss/Training': v.loss})
-
 	# ============
 	# 验证阶段
 	# ============
 
 	@override
 	def onValStepVars(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
-		v = d['Origin']
-		[v.images, v.labels, _] = v.batch
-
 		d['Attack'] = copy(d['Origin'])
 
 	@override
@@ -199,24 +131,21 @@ class LFBAArch(BaseVFLArch):
 
 	@override
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
-		for k, v in d.items():  # * Origin, Attack, Defend
-			[acc1, acc3] = accuracy(v.zTopOut, v.labels, (1, 3))
-			self.logDict({f'loss/Val{k}': v.loss, f'acc/Val{k}/Top1': acc1, f'acc/Val{k}/Top3': acc3})
-
+		for k, v in d.items():
 			# probs = tc.nn.functional.softmax(v.zTopOut, 1)
 			# entropy = tc.distributions.Categorical(probs).entropy().mean().item()
 			# self.logDict({f'entropy/Val{k}': entropy})
 
-			mask = v.labels != self.ns.iTgtLabel
+			mask = v.labels != m.ns.iTgtLabel
 			if not mask.any():
 				continue
 
 			labels = v.labels[mask]
 			zTopOut = v.zTopOut[mask]
 
-			tTgtLabels = tc.full_like(labels, self.ns.iTgtLabel)
+			tTgtLabels = tc.full_like(labels, m.ns.iTgtLabel)
 			[accT1, accT3] = accuracy(zTopOut, tTgtLabels, (1, 3))
-			lossT = self.criterion(zTopOut, tTgtLabels)
+			lossT = m.criterion(zTopOut, tTgtLabels)
 
 			sName = f'Val{k}/Tgt'
-			self.logDict({f'loss/{sName}': lossT, f'acc/{sName}/Top1': accT1, f'acc/{sName}/Top3': accT3})
+			m.logDict({f'loss/{sName}': lossT, f'acc/{sName}/Top1': accT1, f'acc/{sName}/Top3': accT3})

@@ -18,6 +18,7 @@ from utils.common import L, Path, nn
 from utils.define import StepVars
 from utils.logger import createFileLogger
 from utils.misc import ensureList, notNone
+from utils.module import BaseDataModule
 
 from .callback import VFLCallback
 
@@ -47,6 +48,11 @@ class LightningArch(L.LightningModule, ABC):
 
 		self.ns = SimpleNamespace()
 		"""命名空间，用于存储模型训练过程中的临时变量"""
+
+	@property
+	def module(self) -> BaseDataModule:
+		"""当前的 `DataModule` 实例"""
+		return notNone(self.trainer.datamodule)  # type: ignore[attr-defined]
 
 	def logDict(self, dPair: dict[str, Any], nBatchSize: int | None = None) -> None:
 		"""记录字典形式的日志。

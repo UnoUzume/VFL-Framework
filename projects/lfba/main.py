@@ -3,26 +3,16 @@
 本模块实现了 LFBA 实验流程，包括数据加载、模型训练和验证等功能。
 """
 
-# from projects.vflip.vflip import VFLIPCb
 import time
 
-from modules.cifar10 import Handler
-from utils.common import L, Path
+from projects.vfl.config import AppConfig, ModelConfig, RunConfig
+from projects.vfl.core import VFLArch
+from utils.common import L
 from utils.config import getCallbacks, init
 from utils.module import DataConfig, SplitDataModule
 
-from .core import LFBAArch
+from .core import LFBACb
 from .methods import LFBAInferCb
-
-lPartyDims = [128, 128]
-dpRoot = Path(f'data/logs/lfba_P{len(lPartyDims)}L2')
-dpData = Path('data/datasets/cifar10')
-fpCkpt: str | None = None
-# fpCkpt = ''
-
-# 数据模块
-config = DataConfig(dpData, 128, 8, enableTrans=False)
-module = SplitDataModule(len(lPartyDims), config, Handler())
 
 
 def main(lTopDims: list[int]) -> None:
@@ -31,24 +21,31 @@ def main(lTopDims: list[int]) -> None:
 	Args:
 		lTopDims: 顶层网络结构维度列表
 	"""
-	arch = LFBAArch(
-		module,
-		dpRoot,
-		lPartyDims,
-		lTopDims,
+	# 配置
+	data = DataConfig('cifar10', 128, 4, enableTrans=False)
+	model = ModelConfig([128, 128], lTopDims)
+	run = RunConfig(0.001, 40)
+	app = AppConfig(data, model, run, fpCkpt=None)
+
+	# 模型架构
+	arch = VFLArch(
+		app,
 		[
 			LFBAInferCb(1096, 0.08, 0.70, 0.03),
-			# VFLIPCb(dpRoot, lPartyDims, 0.05, 0.05),
+			LFBACb(),
 		],
 	)
 
+	# 数据模块
+	module = SplitDataModule(len(model.lPartyDims), data)
+
 	trainer = L.Trainer(
 		deterministic=True,
-		max_epochs=40,
-		default_root_dir=dpRoot,
+		max_epochs=arch.cfg.run.epochs,
+		default_root_dir=arch.cfg.dpRoot,
 		callbacks=getCallbacks(),
 	)
-	trainer.fit(arch, datamodule=module, ckpt_path=fpCkpt)
+	trainer.fit(arch, datamodule=module, ckpt_path=app.fpCkpt)
 	trainer.validate(arch, datamodule=module, ckpt_path='best')
 
 
