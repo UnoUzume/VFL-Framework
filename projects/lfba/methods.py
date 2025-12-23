@@ -4,7 +4,7 @@
 通过锚样本的梯度来识别并选择目标类和非目标类样本，从而提升联邦学习中的标签推断能力。
 """
 
-from typing import override
+from typing import Any, override
 
 from main.arch import BaseVFLArch
 from main.callback import VFLCallback
@@ -12,6 +12,7 @@ from utils.collector import TensorCollector
 from utils.common import np, tc
 from utils.config import rng
 from utils.define import StepVars
+from utils.vision import tf
 
 
 def getNearPos(
@@ -140,3 +141,39 @@ class LFBAInferCb(VFLCallback):
 		fTgtRate = tc.eq(data['labels'][tTgtPos], m.ns.iTgtLabel).float().mean().item()
 		fNonRate = tc.ne(data['labels'][tNonPos], m.ns.iTgtLabel).float().mean().item()
 		m.logText.info(f'目标类推理准确率：{fTgtRate}, 非目标类推理准确率：{fNonRate}...')
+
+
+class AddTrigger(tf.Transform):
+	"""添加后门攻击触发器的转换类
+
+	在图像的左上角区域添加特定的像素模式，用于实现后门攻击。
+	"""
+
+	@override
+	def transform(self, inpt: Any, params: dict[str, Any]) -> Any:
+		"""对输入应用触发器转换。
+
+		在输入张量的左上角区域添加特定的像素模式，用于后门攻击。
+		如果输入不是张量，则返回 `None`。
+
+		Args:
+			inpt: 输入数据，可以是张量或其他类型
+			params: 转换参数（当前未使用）
+
+		Returns:
+			添加触发器后的张量，如果输入不是张量则返回 `None`
+		"""
+		if isinstance(inpt, tc.Tensor):
+			# 计算触发器区域大小：尺寸最小值的 1/8，但不小于 3
+			size = max(min(inpt.shape[-2:]) // 8, 3)
+			# 创建输入的副本以避免修改原始数据
+			out = inpt.clone()
+			# 将左上角区域设置为黑色
+			out[..., :size, :size] = 0
+			# 将特定位置设置为白色
+			out[..., 3, 1] = 255
+			out[..., 1, 3] = 255
+			out[..., 2, 2] = 255
+			out[..., 1, 1] = 255
+			return out
+		return None

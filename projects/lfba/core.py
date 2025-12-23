@@ -4,9 +4,7 @@
 触发器转换以及完整的 VFL 架构实现。
 """
 
-from typing import Any, override
-
-from torch.optim import Optimizer, lr_scheduler as lr
+from typing import override
 
 from main.arch import BaseVFLArch
 from main.callback import VFLCallback
@@ -14,59 +12,9 @@ from utils.common import copy, np, tc
 from utils.config import rng
 from utils.define import StepVars
 from utils.misc import accuracy
-from utils.vision import createPostTrans, createSpatialTrans, tf
+from utils.vision import createPostTrans, createSpatialTrans
 
-
-def createLRScheduler(optimizer: Optimizer) -> lr.LRScheduler:
-	"""创建学习率调度器链。
-
-	组合使用线性学习率预热和多步学习率衰减策略。
-
-	Args:
-		optimizer: 需要应用学习率调度的优化器
-
-	Returns:
-		组合后的学习率调度器
-	"""
-	scheduler1 = lr.LinearLR(optimizer, 0.1, total_iters=5)
-	scheduler2 = lr.MultiStepLR(optimizer, [20, 30], 0.2)
-	return lr.ChainedScheduler([scheduler1, scheduler2], optimizer)
-
-
-class AddTrigger(tf.Transform):
-	"""添加后门攻击触发器的转换类
-
-	在图像的左上角区域添加特定的像素模式，用于实现后门攻击。
-	"""
-
-	@override
-	def transform(self, inpt: Any, params: dict[str, Any]) -> Any:
-		"""对输入应用触发器转换。
-
-		在输入张量的左上角区域添加特定的像素模式，用于后门攻击。
-		如果输入不是张量，则返回 `None`。
-
-		Args:
-			inpt: 输入数据，可以是张量或其他类型
-			params: 转换参数（当前未使用）
-
-		Returns:
-			添加触发器后的张量，如果输入不是张量则返回 `None`
-		"""
-		if isinstance(inpt, tc.Tensor):
-			# 计算触发器区域大小：尺寸最小值的 1/8，但不小于 3
-			size = max(min(inpt.shape[-2:]) // 8, 3)
-			# 创建输入的副本以避免修改原始数据
-			out = inpt.clone()
-			# 将左上角区域设置为黑色
-			out[..., :size, :size] = 0
-			# 将特定位置设置为白色
-			out[..., 3, 1] = 255
-			out[..., 1, 3] = 255
-			out[..., 2, 2] = 255
-			out[..., 1, 1] = 255
-			return out
-		return None
+from .methods import AddTrigger
 
 
 class LFBACb(VFLCallback):
