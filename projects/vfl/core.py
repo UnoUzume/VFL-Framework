@@ -6,30 +6,12 @@
 
 from typing import override
 
-from torch.optim import Adam, Optimizer, lr_scheduler as lr
-
 from main.arch import BaseVFLArch
-from main.callback import VFLCallback
+from main.callback import OPT_TYPE, VFLCallback
 from utils.define import StepVars
 from utils.misc import accuracy
 
 from .config import AppConfig
-
-
-def createLRScheduler(optimizer: Optimizer) -> lr.LRScheduler:
-	"""创建学习率调度器链。
-
-	组合使用线性学习率预热和多步学习率衰减策略。
-
-	Args:
-		optimizer: 需要应用学习率调度的优化器
-
-	Returns:
-		组合后的学习率调度器
-	"""
-	scheduler1 = lr.LinearLR(optimizer, 0.1, total_iters=10)
-	scheduler2 = lr.MultiStepLR(optimizer, [20, 80], 0.2)
-	return lr.ChainedScheduler([scheduler1, scheduler2], optimizer)
 
 
 class VFLArch(BaseVFLArch):
@@ -53,13 +35,8 @@ class VFLArch(BaseVFLArch):
 		self.zTopNet = config.model.getTopNet()
 
 	@override
-	def onConfigOptims(self, iOpt: int, iLRS: int) -> tuple[list[Optimizer], list[lr.LRScheduler]]:
-		optBtms = [Adam(net.parameters(), self.cfg.run.lr) for net in self.lBtmNets]
-		optTop = Adam(self.zTopNet.parameters(), self.cfg.run.lr)
-
-		lrsBtms = [createLRScheduler(opt) for opt in optBtms]
-		lrsTop = createLRScheduler(optTop)
-		return [*optBtms, optTop], [*lrsBtms, lrsTop]
+	def onConfigOptims(self, iOpt: int, iLRS: int) -> OPT_TYPE:
+		return self.cfg.run.configOptims(self)
 
 	# ============
 	# 训练阶段

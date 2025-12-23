@@ -7,7 +7,11 @@ import sys
 from collections.abc import Callable
 from dataclasses import InitVar, dataclass, field
 
+from torch.optim import Adam, Optimizer, lr_scheduler as lrs
+
 import __main__
+from main.arch import BaseVFLArch
+from main.callback import OPT_TYPE
 from models.fcn import FCN
 from models.resnet import ResNet18
 from utils.common import Path, nn
@@ -58,6 +62,28 @@ def getAppName() -> str:
 		)
 		raise RuntimeError(msg)
 	return name
+
+
+def createLRS(
+	optimizer: Optimizer, milestones: list[int] | None = None, gamma: float = 0.2
+) -> lrs.LRScheduler:
+	"""创建学习率调度器链。
+
+	组合使用线性学习率预热和多步学习率衰减策略。
+
+	Args:
+		optimizer: 需要应用学习率调度的优化器
+		milestones: 学习率衰减的阶段，_可选_，默认值为 `[10, 20, 80]`
+		gamma: 学习率衰减因子，_可选_，默认值为 `0.2`
+
+	Returns:
+		组合后的学习率调度器
+	"""
+	if milestones is None:
+		milestones = [10, 20, 80]
+	scheduler1 = lrs.LinearLR(optimizer, 0.1, total_iters=milestones[0])
+	scheduler2 = lrs.MultiStepLR(optimizer, milestones[1:], gamma)
+	return lrs.ChainedScheduler([scheduler1, scheduler2], optimizer)
 
 
 @dataclass
@@ -120,6 +146,30 @@ class RunConfig:
 	"""学习率，默认为 `1e-3`"""
 	epochs: int = 40
 	"""训练轮数，默认为 `40`"""
+	_configOptims: Callable[[BaseVFLArch, float], OPT_TYPE] | None = None
+	"""配置优化器和学习率调度器的回调函数，_可选_"""
+
+	def configOptims(self, m: BaseVFLArch) -> OPT_TYPE:
+		"""配置优化器和学习率调度器。
+
+		如果 `_configOptims()` 回调函数被提供，则调用该函数获取优化器和学习率调度器；
+		否则，使用默认的 Adam 优化器和学习率调度器。
+
+		Args:
+			m: 模型架构对象，包含底端网络和顶端网络
+
+		Returns:
+			包含优化器和学习率调度器的元组
+		"""
+		if self._configOptims:
+			return self._configOptims(m, self.lr)
+
+		optBtms = [Adam(net.parameters(), self.lr) for net in m.lBtmNets]
+		optTop = Adam(m.zTopNet.parameters(), self.lr)
+
+		lrsBtms = [createLRS(opt) for opt in optBtms]
+		lrsTop = createLRS(optTop)
+		return [*optBtms, optTop], [*lrsBtms, lrsTop]
 
 
 @dataclass
