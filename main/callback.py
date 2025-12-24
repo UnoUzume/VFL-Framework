@@ -57,6 +57,35 @@ class VFLCallback:
 		- 验证阶段 (`Val`) 的参数 `d` 是字典，而训练/测试阶段是单个 `StepVars`。
 	"""
 
+	_iOpt: int | None = None
+	"""【内部属性】回调中优化器的初始索引"""
+	_iLRS: int | None = None
+	"""【内部属性】回调中学习率调度器的初始索引"""
+
+	@property
+	def iOpt(self) -> int:
+		"""回调中优化器的初始索引"""
+		if self._iOpt is None:
+			msg = '回调中优化器的初始索引未设置！'
+			raise ValueError(msg)
+		return self._iOpt
+
+	@iOpt.setter
+	def iOpt(self, value: int) -> None:
+		self._iOpt = value
+
+	@property
+	def iLRS(self) -> int:
+		"""回调中学习率调度器的初始索引"""
+		if self._iLRS is None:
+			msg = '回调中学习率调度器的初始索引未设置！'
+			raise ValueError(msg)
+		return self._iLRS
+
+	@iLRS.setter
+	def iLRS(self, value: int) -> None:
+		self._iLRS = value
+
 	# ============
 	# 初始化与配置
 	# ============
@@ -68,19 +97,15 @@ class VFLCallback:
 			m: VFL 架构实例。
 		"""
 
-	def onConfigOptims(self, iOpt: int, iLRS: int) -> OPT_TYPE:  # noqa: ARG002
+	def onConfigOptims(self) -> OPT_TYPE | None:
 		"""配置优化器时调用。
 
 		允许回调函数注册自己的优化器（例如用于攻击生成的优化器）。
 
-		Args:
-			iOpt: 当前已注册的优化器数量（索引起始值）。
-			iLRS: 当前已注册的学习率调度器数量（索引起始值）。
-
 		Returns:
-			优化器列表，或 (优化器列表，调度器列表) 的元组。如果不添加，返回空列表 `[]`。
+			优化器列表，或 (优化器列表，调度器列表) 的元组。如果不添加，返回 `None`。
 		"""
-		return []
+		return None
 
 	# ============
 	# Checkpoint (检查点)

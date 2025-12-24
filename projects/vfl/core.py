@@ -35,7 +35,7 @@ class VFLArch(BaseVFLArch):
 		self.zTopNet = config.model.getTopNet()
 
 	@override
-	def onConfigOptims(self, iOpt: int, iLRS: int) -> OPT_TYPE:
+	def onConfigOptims(self) -> OPT_TYPE:
 		return self.cfg.run.configOptims(self)
 
 	# ============

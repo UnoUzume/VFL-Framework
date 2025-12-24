@@ -206,7 +206,13 @@ class BaseVFLArch(LightningArch, VFLCallback, ABC):
 		lLRSAll: list[lr.LRScheduler] = []
 
 		for cb in self.lCallbacks:
-			res = cb.onConfigOptims(len(lOptAll), len(lLRSAll))
+			res = cb.onConfigOptims()
+			if res is None:
+				continue
+
+			cb.iOpt = len(lOptAll)
+			cb.iLRS = len(lLRSAll)
+
 			if isinstance(res, tuple):
 				[lOpts, lLRSs] = res
 			else:
