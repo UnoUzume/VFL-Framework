@@ -121,3 +121,25 @@ def accuracy(pred: tc.Tensor, target: tc.Tensor, topk: Sequence[int] = (1,)) -> 
 		res.append(nCorrect / nBatchSize)
 
 	return res
+
+
+def segment(t: int, ins: tuple[int, int], out: tuple[float, float]) -> float:
+	"""在给定的自变量范围内进行线性插值。
+
+	根据输入的自变量 `t` 在指定的自变量区间 `ins` 内进行线性插值计算，
+	并返回对应输出区间 `out` 中的相应值。如果自变量超出范围，
+	则返回区间的边界值。
+
+	Args:
+		t: 当前自变量值
+		ins: 自变量区间，格式为 `(开始自变量，结束自变量)`
+		out: 输出区间，格式为 `(开始值，结束值)`
+
+	Returns:
+		根据线性插值计算得出的浮点数值
+	"""
+	if t < ins[0]:
+		return out[0]
+	if t > ins[1]:
+		return out[1]
+	return out[0] + (out[1] - out[0]) * (t - ins[0]) / (ins[1] - ins[0])
