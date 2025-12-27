@@ -14,7 +14,7 @@ from utils.define import StepVars
 from utils.misc import accuracy
 from utils.vision import createPostTrans, createSpatialTrans
 
-from .methods import AddTrigger
+from .method import AddTrigger
 
 
 class LFBACb(VFLCallback):

@@ -12,7 +12,7 @@ from utils.config import getCallbacks, init
 from utils.module import DataConfig, SplitDataModule
 
 from .core import LFBACb
-from .methods import LFBAInferCb
+from .method import LFBAInferCb
 
 
 def main(lTopDims: list[int]) -> None:

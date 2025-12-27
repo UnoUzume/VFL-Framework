@@ -2,7 +2,7 @@
 
 import time
 
-from projects.lfba.methods import LFBAInferCb
+from projects.lfba.method import LFBAInferCb
 from projects.vfl.config import AppConfig, ModelConfig, RunConfig
 from projects.vfl.core import VFLArch
 from utils.common import L

@@ -6,7 +6,7 @@ from torch.optim import Adam
 
 from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE
-from projects.lfba.methods import LFBAInferCb
+from projects.lfba.method import LFBAInferCb
 from projects.vfl.config import AppConfig, ModelConfig, RunConfig, createLRS
 from projects.vfl.core import VFLArch
 from utils.common import L
