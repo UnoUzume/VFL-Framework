@@ -59,7 +59,7 @@ class SGBACb(VFLCallback):
 		self.args = args
 
 		nDim = config.model.lPartyDims[0]
-		self.zRecNet = FCN([nDim, int(nDim * 2), int(nDim * 2), nDim], False, 'relu')  #! 可变
+		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False, 'relu')  #! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
 	@override

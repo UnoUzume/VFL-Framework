@@ -80,7 +80,7 @@ def createLRS(
 		组合后的学习率调度器
 	"""
 	if milestones is None:
-		milestones = [5, 50, 80]
+		milestones = [5, 20, 30]
 	scheduler1 = lrs.LinearLR(optimizer, 0.1, total_iters=milestones[0])
 	scheduler2 = lrs.MultiStepLR(optimizer, milestones[1:], gamma)
 	return lrs.ChainedScheduler([scheduler1, scheduler2], optimizer)

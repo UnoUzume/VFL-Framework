@@ -121,7 +121,7 @@ def getAugmentTrans(nParty: int = 1) -> list[Transform]:
 	"""
 	dSize = {1: (160, 160), 2: (160, 80), 3: (160, 53), 4: (80, 80), 8: (80, 40)}
 	tSize = dSize[nParty]
-	tPad = (max(tSize[0] // 10, 3), max(tSize[1] // 10, 3))
+	tPad = (max(tSize[0] // 5, 3), max(tSize[1] // 5, 3))
 	return [
 		tf.RandomCrop(tSize, tPad, padding_mode='reflect'),
 		tf.RandomHorizontalFlip(),
