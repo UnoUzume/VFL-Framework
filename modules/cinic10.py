@@ -4,6 +4,7 @@
 用于联邦学习场景下的图像分类任务。
 """
 
+import tarfile
 from collections.abc import Callable
 from typing import override
 
@@ -16,6 +17,9 @@ from utils.common import Path, np
 from utils.data import Dataset
 from utils.module import DataHandler
 from utils.vision import Transform, tf
+
+FN_ARCHIVE = 'CINIC-10.tar.gz'
+DN_DATASET = 'cinic-10-data'
 
 
 class BaseDataset(Dataset[de.TUImageSample]):
@@ -32,7 +36,7 @@ class BaseDataset(Dataset[de.TUImageSample]):
 				isTrain: 是否为训练集
 		"""
 		split = 'train' if isTrain else 'valid'
-		self.dataset = ImageFolder(Path(dpRoot) / 'cinic-10' / split)
+		self.dataset = ImageFolder(Path(dpRoot) / DN_DATASET / split)
 		"""数据集对象，用于加载图像和标签"""
 		self.labels = np.array(self.dataset.targets)
 		"""NumPy 格式的标签数组"""
@@ -129,8 +133,19 @@ class Handler(DataHandler):
 
 	@override
 	def prepare(self, dpData: Path) -> None:
-		# 解压 CINIC-10.tar.gz
-		Path(dpData).unzip('data/datasets/cinic10.tar.gz')
+		fpArchive = dpData / FN_ARCHIVE
+		dpDataset = dpData / DN_DATASET
+
+		if not fpArchive.exists():
+			msg = f'Handler 错误：找不到压缩包 {fpArchive}！'
+			raise FileNotFoundError(msg)
+
+		if not dpDataset.exists():
+			print(f'Handler：正在创建目录并解压 {fpArchive.name}...')
+			dpDataset.mkdir(parents=True, exist_ok=True)
+			with tarfile.open(fpArchive, 'r:gz') as tar:
+				tar.extractall(dpDataset, filter='data')
+			print(f'Handler：解压完成，数据位于：{dpDataset}')
 
 	@override
 	def getTrainDataset(self, dpData: Path) -> Dataset[de.TUImageSample]:
