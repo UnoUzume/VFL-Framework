@@ -63,7 +63,8 @@ class VFLArch(BaseVFLArch):
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		for k, v in d.items():  # * Origin
 			[acc1, acc3] = accuracy(v.zTopOut, v.labels, (1, 3))
-			self.logDict({f'loss/Val{k}': v.loss, f'acc/Val{k}/Top1': acc1, f'acc/Val{k}/Top3': acc3})
+			sName = f'Val{v.iLoaderIdx}_{k}'
+			self.logDict({f'loss/{sName}': v.loss, f'acc/{sName}/Top1': acc1, f'acc/{sName}/Top3': acc3})
 
 	# ============
 	# 测试阶段

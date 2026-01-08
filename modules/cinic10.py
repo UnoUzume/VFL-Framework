@@ -12,7 +12,7 @@ from jaxtyping import jaxtyped
 from torchvision.datasets import ImageFolder
 
 from utils import define as de
-from utils.common import Path
+from utils.common import Path, np
 from utils.data import Dataset
 from utils.module import DataHandler
 from utils.vision import Transform, tf
@@ -32,8 +32,10 @@ class BaseDataset(Dataset[de.TUImageSample]):
 				isTrain: 是否为训练集
 		"""
 		split = 'train' if isTrain else 'valid'
-		self.dataset = ImageFolder(Path(dpRoot) / split)
+		self.dataset = ImageFolder(Path(dpRoot) / 'cinic-10' / split)
 		"""数据集对象，用于加载图像和标签"""
+		self.labels = np.array(self.dataset.targets)
+		"""NumPy 格式的标签数组"""
 		self.transform = tf.ToImage()
 		"""图像变换函数，用于将 NumPy 图像转换为 PyTorch 张量"""
 
@@ -127,7 +129,8 @@ class Handler(DataHandler):
 
 	@override
 	def prepare(self, dpData: Path) -> None:
-		pass
+		# 解压 CINIC-10.tar.gz
+		Path(dpData).unzip('data/datasets/cinic10.tar.gz')
 
 	@override
 	def getTrainDataset(self, dpData: Path) -> Dataset[de.TUImageSample]:

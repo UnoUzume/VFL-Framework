@@ -73,14 +73,14 @@ def createLRS(
 
 	Args:
 		optimizer: 需要应用学习率调度的优化器
-		milestones: 学习率衰减的阶段，_可选_，默认值为 `[10, 20, 80]`
+		milestones: 学习率衰减的阶段，_可选_，默认值为 `[5, 20, 30]`
 		gamma: 学习率衰减因子，_可选_，默认值为 `0.2`
 
 	Returns:
 		组合后的学习率调度器
 	"""
 	if milestones is None:
-		milestones = [10, 20, 80]
+		milestones = [5, 50, 80]
 	scheduler1 = lrs.LinearLR(optimizer, 0.1, total_iters=milestones[0])
 	scheduler2 = lrs.MultiStepLR(optimizer, milestones[1:], gamma)
 	return lrs.ChainedScheduler([scheduler1, scheduler2], optimizer)

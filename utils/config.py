@@ -94,8 +94,8 @@ def getCallbacks() -> list[Callback]:
 		包含回调对象的列表。
 	"""
 	cbCkptAcc = ModelCheckpoint(
-		filename='epoch={epoch}-acc_val={acc/ValOrigin/Top1:.4f}',
-		monitor='acc/ValOrigin/Top1',
+		filename='epoch={epoch}-acc_val={acc/Val0_Origin/Top1:.4f}',
+		monitor='acc/Val0_Origin/Top1',
 		save_top_k=1,
 		mode='max',
 		auto_insert_metric_name=False,
@@ -104,7 +104,8 @@ def getCallbacks() -> list[Callback]:
 	cbLRMonitor = LearningRateMonitor()
 
 	#! 注意：`validate(ckpt_path="best")` 仅考虑第一个 `ModelCheckpoint`
-	return [cbCkptAcc, cbCkptEpoch, cbLRMonitor]
+	# return [cbCkptAcc, cbCkptEpoch, cbLRMonitor]
+	return [cbCkptAcc, cbLRMonitor]
 
 
 __all__ = ['getCallbacks', 'init', 'rng']

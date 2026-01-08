@@ -6,7 +6,10 @@
 from collections.abc import Sequence
 from typing import TypedDict
 
-from .common import nn, tc
+from beartype import beartype as typechecker
+from jaxtyping import Integer, jaxtyped
+
+from .common import nn, np, tc
 
 
 def ensureList[T](ins: list[T] | T | None) -> list[T]:
@@ -143,3 +146,32 @@ def segment(t: int, ins: tuple[int, int], out: tuple[float, float]) -> float:
 	if t > ins[1]:
 		return out[1]
 	return out[0] + (out[1] - out[0]) * (t - ins[0]) / (ins[1] - ins[0])
+
+
+@jaxtyped(typechecker=typechecker)
+def selectPerClass(
+	lLabels: list[int] | Integer[np.ndarray | tc.Tensor, ' n'],
+	nPerClass: int,
+	rng: np.random.Generator,
+) -> tuple[list[int], list[int]]:
+	if isinstance(lLabels, tc.Tensor):
+		aLabels = lLabels.numpy()
+	else:
+		aLabels = np.asarray(lLabels)
+
+	assert aLabels.ndim == 1, '输入标签数组维度必须为 1！'
+
+	lSelectIdxs: list[int] = []
+	lOtherIdxs: list[int] = []
+
+	aUniqueClasses = np.unique(aLabels)
+	for i in aUniqueClasses:
+		idxs = np.flatnonzero(aLabels == i)
+		assert idxs.size >= nPerClass, f'类别 {i} 的样本数不足 {nPerClass}！'
+		rng.shuffle(idxs)
+		lSelectIdxs.extend(idxs[:nPerClass].tolist())
+		lOtherIdxs.extend(idxs[nPerClass:].tolist())
+
+	rng.shuffle(lSelectIdxs)
+	rng.shuffle(lOtherIdxs)
+	return lSelectIdxs, lOtherIdxs

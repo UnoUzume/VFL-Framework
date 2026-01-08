@@ -9,7 +9,7 @@ from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE, VFLCallback
 from models.fcn import FCN
 from projects.vfl.config import AppConfig
-from utils.common import F, copy, np, tc
+from utils.common import copy, np, tc
 from utils.config import rng
 from utils.define import StepVars
 from utils.misc import accuracy, segment
@@ -58,8 +58,8 @@ class SGBACb(VFLCallback):
 		"""
 		self.args = args
 
-		nDim = config.model.lPartyDims[0]
-		self.zRecNet = FCN([nDim, int(nDim * 2), int(nDim * 2), nDim], False, 'relu')  #! 可变
+		nDim = sum(config.model.lPartyDims[:3])
+		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False, 'relu')  #! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
 	@override
@@ -87,30 +87,17 @@ class SGBACb(VFLCallback):
 
 		if m.current_epoch < 1:
 			return
-
 		# 获取当前批次中投毒目的样本、非目标类样本的位置（索引的索引）
 		aBatchIdxs = v.indices.cpu().numpy()
 		aDstPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aDstIdxs))  #: aBatchIdxs_DstPos
 		self.aDstPos = aDstPos
 		aVicPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aVicIdxs))  #: aBatchIdxs_VicPos
 
-		# if len(aDstPos) > 0 and len(aVicPos) > 0:  # 如果找到投毒目标
-		# 	aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
-		# 	for dst, src in zip(aDstPos, aSrcPos, strict=True):
-		# 		v.lBtmIns[0][dst] = v.lBtmIns[0][src]
-
-		if len(aDstPos) > 0:  # 如果找到投毒目标
-			# 寻找投毒目标对应的 self.aDstIdxs 的元素位置，同时作为 self.aSrcIdxs 的元素位置
-			aSrcIdxs_Pos = _aDstIdxs_Pos = np.where(aBatchIdxs[aDstPos, None] == m.ns.aDstIdxs)[1]
-			# 获取投毒来源的元素
-			aSrcIdxsSubset = m.ns.aSrcIdxs[aSrcIdxs_Pos]
-
-			for pos, src_idx in zip(self.aDstPos, aSrcIdxsSubset, strict=True):
-				image = m.module.dsTrain[src_idx.item()][0]  # pyright: ignore[reportAttributeAccessIssue]
-
-				parts = m.module.fnSplit(image.unsqueeze(0), m.module.nParty)
-				parts = [m.module.tfCurrent(part) for part in parts]
-				v.lBtmIns[0][pos] = parts[0]
+		if len(aDstPos) > 0 and len(aVicPos) > 0:  # 如果找到投毒目标
+			aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
+			for dst, src in zip(aDstPos, aSrcPos, strict=True):
+				for i in range(3):
+					v.lBtmIns[i][dst] = v.lBtmIns[i][src]
 
 	@override
 	def onTrainBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -118,20 +105,21 @@ class SGBACb(VFLCallback):
 			return
 
 		#! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
-		tEmbeds = v.lBtmOut[0]
+		tEmbeds = tc.cat(v.lBtmOut[:3], 1)
 		tRecon = self.zRecNet(tEmbeds)
 		self.lossRec = tc.norm(tEmbeds - tRecon, 2, 1).mean()
-		# self.lossRec = F.mse_loss(tEmbeds, tRecon, reduction='sum') / len(v.indices)
 		m.logDict({'loss/Recon': self.lossRec})
 
 		if len(self.aDstPos) > 0:  # 如果找到投毒目标
 			alpha = self.args.fTrainAlpha
 
 			#! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			tEmbeds_ = v.lBtmOut[0][self.aDstPos].detach()
+			tEmbeds_ = tc.cat([v.lBtmOut[i][self.aDstPos].detach() for i in range(3)], 1)
 			tRecon_ = self.zRecNet(tEmbeds_) * alpha + tEmbeds_ * (1 - alpha)
-			v.lBtmOut[0] = v.lBtmOut[0].clone()
-			v.lBtmOut[0][self.aDstPos] = tRecon_
+			lc = tc.split(tRecon_, 32, 1)
+			for i in range(3):
+				v.lBtmOut[i] = v.lBtmOut[i].clone()  # 避免 In-place 操作错误
+				v.lBtmOut[i][self.aDstPos] = lc[i]
 
 	@override
 	def onTrainTopInsGrad(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -142,7 +130,8 @@ class SGBACb(VFLCallback):
 		m.manual_backward(self.lossRec * p, retain_graph=True)
 
 		if len(self.aDstPos) > 0:  # 如果找到投毒目标
-			v.lTopInsGrad[0][self.aDstPos] *= segment(m.current_epoch, (15, 20), self.args.lGradScales)
+			for i in range(3):
+				v.lTopInsGrad[i][self.aDstPos] *= segment(m.current_epoch, (15, 20), self.args.lGradScales)
 
 	@override
 	def onTrainOptimStep(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -162,9 +151,11 @@ class SGBACb(VFLCallback):
 		alpha = self.args.fValAlpha
 
 		v = d['Attack']
-		tEmbeds = v.lBtmOut[0]
+		tEmbeds = tc.cat(v.lBtmOut[:3], 1)
 		tRecon = self.zRecNet(tEmbeds) * alpha + tEmbeds * (1 - alpha)
-		v.lBtmOut[0] = tRecon
+		lc = tc.split(tRecon, 32, 1)
+		for i in range(3):
+			v.lBtmOut[i] = lc[i]
 
 		lossRecon = tc.norm(tEmbeds - tRecon, 2, 1).mean()
 		m.logDict({'loss/Pattern': lossRecon})
@@ -176,7 +167,7 @@ class SGBACb(VFLCallback):
 			# entropy = tc.distributions.Categorical(probs).entropy().mean().item()
 			# self.logDict({f'entropy/Val{k}': entropy})
 
-			mask = v.labels != m.ns.iTgtLabel
+			mask = v.labels == m.ns.iVicLabel
 			if not mask.any():
 				continue
 

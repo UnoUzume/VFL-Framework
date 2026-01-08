@@ -5,6 +5,7 @@
 提高代码的可读性和一致性。
 """
 
+import math
 from copy import copy
 from pathlib import Path
 
@@ -13,11 +14,14 @@ import numpy as np
 import numpy.typing as npt
 import torch as tc
 import torch.nn as nn
+import torch.nn.functional as F
 
 __all__ = [
+	'F',
 	'L',
 	'Path',
 	'copy',
+	'math',
 	'nn',
 	'np',
 	'npt',

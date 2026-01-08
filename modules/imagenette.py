@@ -34,6 +34,8 @@ class BaseDataset(Dataset[de.TUImageSample]):
 		split = 'train' if isTrain else 'val'
 		self.dataset = Imagenette(dpRoot, split, '160px')
 		"""数据集对象，用于加载图像和标签"""
+		self.labels = [s[1] for s in self.dataset._samples]
+		"""数据集标签列表"""
 		self.transform = tf.Compose([tf.ToImage(), tf.CenterCrop(160)])
 		"""图像变换函数，用于将 NumPy 图像转换为 PyTorch 张量"""
 
@@ -85,9 +87,20 @@ def splitImage(data: de.TUImages, nParty: int) -> list[de.TUImages]:
 	if nParty == 4:
 		return [
 			data[..., :80, :80],  # 左上角
-			data[..., 80:, :80],  # 左下角
 			data[..., :80, 80:],  # 右上角
+			data[..., 80:, :80],  # 左下角
 			data[..., 80:, 80:],  # 右下角
+		]
+	if nParty == 8:
+		return [
+			data[..., :80, :40],  # 左上角
+			data[..., :80, 40:80],
+			data[..., :80, 80:120],
+			data[..., :80, 120:],  # 右上角
+			data[..., 80:, :40],  # 左下角
+			data[..., 80:, 40:80],
+			data[..., 80:, 80:120],
+			data[..., 80:, 120:],  # 右下角
 		]
 	msg = f'不支持的 nParty: {nParty}'
 	raise ValueError(msg)
@@ -106,9 +119,11 @@ def getAugmentTrans(nParty: int = 1) -> list[Transform]:
 	Returns:
 			数据增强变换列表
 	"""
-	lSize = [(160, 160), (160, 80), (160, 53), (80, 80)]
+	dSize = {1: (160, 160), 2: (160, 80), 3: (160, 53), 4: (80, 80), 8: (80, 40)}
+	tSize = dSize[nParty]
+	tPad = (max(tSize[0] // 10, 3), max(tSize[1] // 10, 3))
 	return [
-		tf.RandomCrop(lSize[nParty - 1], 15, padding_mode='reflect'),
+		tf.RandomCrop(tSize, tPad, padding_mode='reflect'),
 		tf.RandomHorizontalFlip(),
 		tf.ColorJitter(0.2, 0.2, 0.2),
 	]

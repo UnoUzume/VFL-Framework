@@ -265,7 +265,11 @@ class BaseVFLArch(LightningArch, VFLCallback, ABC):
 			batch_idx: 批次索引
 			dataloader_idx: 数据加载器索引，默认为 `0`
 		"""
-		v = StepVars(batch, batch_idx, dataloader_idx)
+		raw = batch
+		if isinstance(batch, list):
+			batch = batch[0]
+
+		v = StepVars(raw, batch, batch_idx, dataloader_idx)
 		self._executeCallback(VFLCallback.onTrainStepVars, v)
 
 		# 1. 底部模型输入
@@ -305,7 +309,7 @@ class BaseVFLArch(LightningArch, VFLCallback, ABC):
 
 		# 6.4 底部模型反向传播
 		for out, grad in zip(v.lBtmOut, v.lTopInsGrad, strict=True):
-			self.manual_backward(out, grad)
+			self.manual_backward(out, grad, retain_graph=True)
 
 		# 7. 优化器更新
 		self.getTopOptim().step()
@@ -338,7 +342,11 @@ class BaseVFLArch(LightningArch, VFLCallback, ABC):
 			batch_idx: 批次索引
 			dataloader_idx: 数据加载器索引，默认为 `0`
 		"""
-		d = {'Origin': StepVars(batch, batch_idx, dataloader_idx)}
+		raw = batch
+		if isinstance(batch, list):
+			batch = batch[0]
+
+		d = {'Origin': StepVars(raw, batch, batch_idx, dataloader_idx)}
 		self._executeCallback(VFLCallback.onValStepVars, d)
 
 		for v in d.values():
@@ -384,7 +392,11 @@ class BaseVFLArch(LightningArch, VFLCallback, ABC):
 			batch_idx: 批次索引
 			dataloader_idx: 数据加载器索引，默认为 `0`
 		"""
-		v = StepVars(batch, batch_idx, dataloader_idx)
+		raw = batch
+		if isinstance(batch, list):
+			batch = batch[0]
+
+		v = StepVars(raw, batch, batch_idx, dataloader_idx)
 		self._executeCallback(VFLCallback.onTestStepVars, v)
 
 		v.lBtmIns = v.images

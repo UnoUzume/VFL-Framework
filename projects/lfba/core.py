@@ -42,17 +42,17 @@ class LFBACb(VFLCallback):
 		self.tfPost = createPostTrans()
 
 	@override
-	def onTrainBtmIns(self, m: 'BaseVFLArch', v: StepVars) -> None:
+	def onTrainBtmIns(self, m: BaseVFLArch, v: StepVars) -> None:
 		v.lBtmIns = [self.tfAugment(images) for images in v.lBtmIns]
 
 		if m.current_epoch >= 1:
 			# 获取当前批次中投毒目的样本、非目标类样本的位置（索引的索引）
 			aBatchIdxs = v.indices.cpu().numpy()
 			aDstPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aDstIdxs))  #: aBatchIdxs_DstPos
-			aNonPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aNonIdxs))  #: aBatchIdxs_NonPos
+			aVicPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aVicIdxs))  #: aBatchIdxs_VicPos
 
-			if len(aDstPos) > 0 and len(aNonPos) > 0:  # 如果找到投毒目标
-				aSrcPos = rng().choice(aNonPos, len(aDstPos), len(aNonPos) < len(aDstPos))
+			if len(aDstPos) > 0 and len(aVicPos) > 0:  # 如果找到投毒目标
+				aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
 				for dst, src in zip(aDstPos, aSrcPos, strict=True):
 					v.lBtmIns[0][dst] = self.tfTrigger(v.lBtmIns[0][src])
 
@@ -67,7 +67,7 @@ class LFBACb(VFLCallback):
 		d['Attack'] = copy(d['Origin'])
 
 	@override
-	def onValBtmIns(self, m: 'BaseVFLArch', d: dict[str, StepVars]) -> None:
+	def onValBtmIns(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		v = d['Origin']
 		v.lBtmIns = [self.tfNormal(images) for images in v.lBtmIns]
 		v.lBtmIns = [self.tfPost(images) for images in v.lBtmIns]

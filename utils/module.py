@@ -7,13 +7,13 @@
 import importlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, override
+from typing import TYPE_CHECKING, Protocol, overload, override
 
-from main.module import DataModule
+from main.module import DataModule, LoaderType
 
 from . import define as de
 from .common import Path, nn, tc
-from .data import Dataset, TypedDataLoader, collate
+from .data import DataLoader, Dataset, collate
 from .vision import Transform, createTrans
 
 if TYPE_CHECKING:
@@ -206,26 +206,16 @@ class BaseDataModule(DataModule):
 		"""验证数据集实例"""
 
 	@override
-	def getTrainLoader(self) -> TypedDataLoader[de.TUImageBatch]:
-		return TypedDataLoader[de.TUImageBatch](
+	def getTrainLoader(self) -> LoaderType:
+		return DataLoader(
 			self.dsTrain, self.cfg.nBatchSize, True, collate_fn=self.cfg.fnCollate, **self.params
 		)
 
 	@override
-	def getValLoader(self) -> TypedDataLoader[de.TUImageBatch]:
-		return TypedDataLoader[de.TUImageBatch](
+	def getValLoader(self) -> LoaderType:
+		return DataLoader(
 			self.dsVal, self.cfg.nBatchSize, False, collate_fn=self.cfg.fnCollate, **self.params
 		)
-
-	@override
-	def transferBatchToDevice(
-		self, batch: de.TUImageBatch, device: tc.device, dataloader_idx: int
-	) -> de.TUImageBatch:
-		[image, label, index] = batch
-		image = image.to(device)
-		label = label.to(device)
-		index = index.to(device)
-		return de.TUImageBatch(image, label, index)
 
 
 class TransDataModule(BaseDataModule):
@@ -268,14 +258,29 @@ class SplitDataModule(BaseDataModule):
 			self.lAugmentTrans = self.hdlr.getAugmentTrans(self.nParty)
 		self.tfAugment = createTrans(self.lAugmentTrans)
 
-	@override
-	def onAfterBatchTransfer(
-		self, batch: de.TUImageBatch, dataloader_idx: int
-	) -> de.TSplitImageBatch:
+	def _onAfterBatchTransfer(self, batch: de.TUImageBatch) -> de.TSplitImageBatch:
 		[image, label, index] = batch
 		parts = self.fnSplit(image, self.nParty)
 		parts = [self.tfCurrent(part) for part in parts]
 		return de.TSplitImageBatch(parts, label, index)
+
+	@overload
+	def onAfterBatchTransfer(
+		self, batch: de.TUImageBatch, dataloader_idx: int
+	) -> de.TSplitImageBatch: ...
+
+	@overload
+	def onAfterBatchTransfer(
+		self, batch: list[de.TUImageBatch], dataloader_idx: int
+	) -> list[de.TSplitImageBatch]: ...
+
+	@override
+	def onAfterBatchTransfer(
+		self, batch: de.TUImageBatch | list[de.TUImageBatch], dataloader_idx: int
+	) -> de.TSplitImageBatch | list[de.TSplitImageBatch]:
+		if isinstance(batch, list):
+			return [self._onAfterBatchTransfer(b) for b in batch]
+		return self._onAfterBatchTransfer(batch)
 
 
 __all__ = [

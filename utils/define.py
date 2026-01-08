@@ -5,7 +5,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from beartype import beartype as typechecker
 from jaxtyping import Float32, Int64, UInt8
@@ -116,6 +116,7 @@ class StepVars:
 	"""模型训练步骤中的变量集合。
 
 	Args:
+		raw: 原始批次数据
 		batch: 已分割批次数据
 		iBatchIdx: 批次索引
 		iLoaderIdx: 数据加载器索引
@@ -130,6 +131,8 @@ class StepVars:
 		lTopInsGrad: 全局模型输入梯度，默认为空列表
 	"""
 
+	raw: Any
+	"""原始批次数据"""
 	batch: TSplitImageBatch
 	"""已分割批次数据"""
 	iBatchIdx: int
