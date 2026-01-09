@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import override
 
-from torch.optim import Adam
+from torch.optim import AdamW, lr_scheduler as lrs
 
 from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE, VFLCallback
@@ -57,44 +57,47 @@ class SGBACb(VFLCallback):
 			config: 应用配置对象
 		"""
 		self.args = args
+		self.cfg = config
 
-		nDim = config.model.lPartyDims[0]
-		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False, 'relu')  #! 可变
+		nDim = self.cfg.model.lPartyDims[0]
+		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  #! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
 	@override
 	def onInitModule(self, m: BaseVFLArch) -> None:
-		m.logText.info(f'{self.__class__.__name__}.onInitModule()')
 		m.add_module('zRecNet', self.zRecNet)
 
 	@override
 	def onConfigOptims(self) -> OPT_TYPE:
-		optRec = Adam(self.zRecNet.parameters(), self.args.fRecLr)
-		return [optRec]
+		optRec = AdamW(self.zRecNet.parameters(), self.args.fRecLr)
+		lrsRec = lrs.ConstantLR(optRec, 0.8, 5)
+		return [optRec], [lrsRec]
+
+	def getRecon(self, tEmbed: tc.Tensor, alpha: float = 1.0) -> tuple[tc.Tensor, tc.Tensor]:
+		tRecon = self.zRecNet(tEmbed) * alpha + tEmbed * (1 - alpha)
+		vLoss = tc.norm(tEmbed - tRecon, 2, 1).mean()
+
+		# self.lossRec = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)
+		return tRecon, vLoss
 
 	# ============
 	# 训练阶段
 	# ============
 
 	@override
-	def onFitStart(self, m: BaseVFLArch) -> None:
-		m.logText.info(m.trainer.log_dir)
-
-	@override
 	def onTrainBtmIns(self, m: BaseVFLArch, v: StepVars) -> None:
-		optRec = m.getOptim(self.iOpt)
-		optRec.zero_grad()
+		if m.current_epoch > 0:
+			self.attackBtmIns(m, v)
 
-		if m.current_epoch < 1:
-			return
-
+	def attackBtmIns(self, m: BaseVFLArch, v: StepVars) -> None:
 		# 获取当前批次中投毒目的样本、非目标类样本的位置（索引的索引）
 		aBatchIdxs = v.indices.cpu().numpy()
 		aDstPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aDstIdxs))  #: aBatchIdxs_DstPos
 		self.aDstPos = aDstPos
 		aVicPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aVicIdxs))  #: aBatchIdxs_VicPos
 
-		# if len(aDstPos) > 0 and len(aVicPos) > 0:  # 如果找到投毒目标
+		# if len(aDstPos) > 0 and len(aVicPos) > 0:
+		# 	# 选择投毒来源样本（属于受害类样本）的位置
 		# 	aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
 		# 	for dst, src in zip(aDstPos, aSrcPos, strict=True):
 		# 		v.lBtmIns[0][dst] = v.lBtmIns[0][src]
@@ -114,35 +117,43 @@ class SGBACb(VFLCallback):
 
 	@override
 	def onTrainBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
-		if m.current_epoch < 1:
-			return
+		if m.current_epoch > 0:
+			self.attackBtmOut(m, v)
 
+	def attackBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
 		#! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
-		tEmbeds = v.lBtmOut[0]
-		tRecon = self.zRecNet(tEmbeds)
-		self.lossRec = tc.norm(tEmbeds - tRecon, 2, 1).mean()
-		# self.lossRec = F.mse_loss(tEmbeds, tRecon, reduction='sum') / len(v.indices)
-		m.logDict({'loss/Recon': self.lossRec})
+		tEmbed = v.lBtmOut[0]
+		_, self.vReconLoss = self.getRecon(tEmbed)
+		m.logDict({'loss/ReconTrain': self.vReconLoss})
 
-		if len(self.aDstPos) > 0:  # 如果找到投毒目标
-			alpha = self.args.fTrainAlpha
+		# # 投毒操作
+		v.lBtmOut[0] = v.lBtmOut[0].clone()  # 避免 In-place 操作错误
 
+		# 目标类样本（目的样本 -> 来源样本，建立目标类与来源样本的联系）
+		if len(self.aDstPos) > 0:  # 如果找到投毒目的样本
 			#! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			tEmbeds_ = v.lBtmOut[0][self.aDstPos].detach()
-			tRecon_ = self.zRecNet(tEmbeds_) * alpha + tEmbeds_ * (1 - alpha)
-			v.lBtmOut[0] = v.lBtmOut[0].clone()
-			v.lBtmOut[0][self.aDstPos] = tRecon_
+			tEmbed = v.lBtmOut[0][self.aDstPos].detach()
+			tRecon, _ = self.getRecon(tEmbed, self.args.fTrainAlpha)
+			v.lBtmOut[0][self.aDstPos] = tRecon
+
+	@override
+	def onTrainLoss(self, m: BaseVFLArch, v: StepVars) -> None:
+		optRec = m.getOptim(self.iOpt)
+		optRec.zero_grad()
 
 	@override
 	def onTrainTopInsGrad(self, m: BaseVFLArch, v: StepVars) -> None:
-		if m.current_epoch < 1:
-			return
+		if m.current_epoch > 0:
+			self.doSGBA(m, v)
 
+	def doSGBA(self, m: BaseVFLArch, v: StepVars) -> None:
+		"""SGBA 攻击"""
 		p = segment(m.current_epoch, (15, 20), self.args.lLossScales)
-		m.manual_backward(self.lossRec * p, retain_graph=True)
+		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
 		if len(self.aDstPos) > 0:  # 如果找到投毒目标
-			v.lTopInsGrad[0][self.aDstPos] *= segment(m.current_epoch, (15, 20), self.args.lGradScales)
+			value = segment(m.current_epoch, (15, 20), self.args.lGradScales)
+			v.lTopInsGrad[0][self.aDstPos] *= value
 
 	@override
 	def onTrainOptimStep(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -159,33 +170,34 @@ class SGBACb(VFLCallback):
 
 	@override
 	def onValBtmOut(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
-		alpha = self.args.fValAlpha
-
 		v = d['Attack']
-		tEmbeds = v.lBtmOut[0]
-		tRecon = self.zRecNet(tEmbeds) * alpha + tEmbeds * (1 - alpha)
+
+		tEmbed = v.lBtmOut[0]
+		tRecon, vReconLoss = self.getRecon(tEmbed, self.args.fValAlpha)
 		v.lBtmOut[0] = tRecon
 
-		lossRecon = tc.norm(tEmbeds - tRecon, 2, 1).mean()
-		m.logDict({'loss/Pattern': lossRecon})
+		m.logDict({'loss/ReconVal': vReconLoss})
 
 	@override
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		for k, v in d.items():
-			# probs = tc.nn.functional.softmax(v.zTopOut, 1)
-			# entropy = tc.distributions.Categorical(probs).entropy().mean().item()
-			# self.logDict({f'entropy/Val{k}': entropy})
+			probs = F.softmax(v.zTopOut, 1)
+			entropy = tc.distributions.Categorical(probs).entropy().mean().item()  # type: ignore[no-untyped-call]
+			m.logDict({f'entropy/Val{k}': entropy})
 
-			mask = v.labels != m.ns.iTgtLabel
-			if not mask.any():
-				continue
+			if m.current_epoch > 0:
+				self.logSGBA(m, v, k)
 
-			labels = v.labels[mask]
-			zTopOut = v.zTopOut[mask]
+	def logSGBA(self, m: BaseVFLArch, v: StepVars, k: str) -> None:
+		mask = v.labels != m.ns.iTgtLabel
+		if mask.any():
+			tTopOut = v.zTopOut[mask]
 
-			tTgtLabels = tc.full_like(labels, m.ns.iTgtLabel)
-			[accT1, accT3] = accuracy(zTopOut, tTgtLabels, (1, 3))
-			lossT = m.criterion(zTopOut, tTgtLabels)
+			tLabels = v.labels[mask]
+			tTgtLabels = tc.full_like(tLabels, m.ns.iTgtLabel)
 
-			sName = f'Val{k}/Tgt'
-			m.logDict({f'loss/{sName}': lossT, f'acc/{sName}/Top1': accT1, f'acc/{sName}/Top3': accT3})
+			[acc1, acc3] = accuracy(tTopOut, tTgtLabels, (1, 3))
+			loss = m.criterion(tTopOut, tTgtLabels)
+
+			name = f'Val{v.iLoaderIdx}_{k}'
+			m.logDict({f'lossTgt/{name}': loss, f'accTgt/{name}/Top1': acc1, f'accTgt/{name}/Top3': acc3})

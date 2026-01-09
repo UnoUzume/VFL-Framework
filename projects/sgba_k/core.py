@@ -1,6 +1,5 @@
 """SGBA 攻击实现模块"""
 
-import math
 from dataclasses import dataclass
 from typing import override
 
@@ -10,10 +9,12 @@ from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE, VFLCallback
 from models.fcn import FCN
 from projects.vfl.config import AppConfig, createLRS
-from utils.common import F, copy, nn, np, tc
+from utils.common import F, copy, math, nn, np, tc
 from utils.config import rng
 from utils.define import StepVars
 from utils.misc import accuracy, segment
+
+# TODO: attackBtmIns getRecon
 
 
 @dataclass
@@ -62,18 +63,19 @@ class SGBACb(VFLCallback):
 		self.args = args
 		self.cfg = config
 
-		self.nAP = 3  #: nAttackPartys
-		nDim = sum(config.model.lPartyDims[: self.nAP])
-		self.zRecNet = FCN([nDim, int(nDim * 2), int(nDim * 2), nDim], False)  #! 可变
+		self.setAPs = {0, 1, 2}  #: setAttackPartys
+		self.setRPs = {3}  #: setReferencePartys
+
+		lPartyDims = self.cfg.model.lPartyDims
+		nDim = sum(lPartyDims[i] for i in self.setAPs)
+		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  #! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
-		self.zSurNet = FCN([sum(self.cfg.model.lPartyDims[: self.nAP + 1]), 256, 10])
+		self.zSurNet = FCN([sum(lPartyDims[i] for i in self.setAPs | self.setRPs), 256, 10])
 		self.criSur = nn.CrossEntropyLoss()
 
 	@override
 	def onInitModule(self, m: BaseVFLArch) -> None:
-		m.logText.info(f'{self.__class__.__name__}.onInitModule()')
-
 		m.add_module('zRecNet', self.zRecNet)
 		m.add_module('zSurNet', self.zSurNet)
 		m.add_module('criSur', self.criSur)
@@ -83,29 +85,29 @@ class SGBACb(VFLCallback):
 		optRec = AdamW(self.zRecNet.parameters(), self.args.fRecLr)
 		optSur = AdamW(self.zSurNet.parameters(), self.args.fSurLr)
 
-		lrsRec = lrs.ConstantLR(optRec, 0.8)
+		lrsRec = lrs.ConstantLR(optRec, 0.8, 5)
 		# lrsRec = createLRS(optRec)
 		lrsSur = createLRS(optSur)
 		return [optRec, optSur], [lrsRec, lrsSur]
 
-	def getRecon(self, lEmbeds: list[tc.Tensor], alpha: float) -> tuple[list[tc.Tensor], float]:
+	def getRecon(
+		self, lEmbeds: list[tc.Tensor], alpha: float = 1.0
+	) -> tuple[list[tc.Tensor], tc.Tensor]:
 		tEmbed = tc.cat(lEmbeds, 1)
 		lDims = [t.size(1) for t in lEmbeds]
 
 		tRecon = self.zRecNet(tEmbed) * alpha + tEmbed * (1 - alpha)
 		lRecons = list(tc.split(tRecon, lDims, 1))
 
-		# loss = tc.norm(tEmbed - tRecon, 2, 1).mean().item()
-		vLoss = sum([tc.norm(a - b, 2, 1).mean().item() for a, b in zip(lEmbeds, lRecons, strict=True)])
+		# vLoss = tc.norm(tEmbed - tRecon, 2, 1).mean().item()
+		vLoss = tc.sum([tc.norm(a - b, 2, 1).mean() for a, b in zip(lEmbeds, lRecons, strict=True)])
+
+		# self.lossRec = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)
 		return lRecons, vLoss
 
 	# ============
 	# 训练阶段
 	# ============
-
-	@override
-	def onFitStart(self, m: BaseVFLArch) -> None:
-		m.logText.info(m.trainer.log_dir)
 
 	@override
 	def onTrainBtmIns(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -125,7 +127,7 @@ class SGBACb(VFLCallback):
 			# 选择投毒来源样本（属于受害类样本）的位置
 			aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
 			for dst, src in zip(aDstPos, aSrcPos, strict=True):
-				for i in range(self.nAP):
+				for i in self.setAPs:
 					v.lBtmIns[i][dst] = v.lBtmIns[i][src]
 
 	@override
@@ -135,27 +137,24 @@ class SGBACb(VFLCallback):
 
 	def attackBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
 		#! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
-		tEmbeds = tc.cat(v.lBtmOut[: self.nAP], 1)
-		tRecon = self.zRecNet(tEmbeds)
-		self.lossRec = tc.norm(tEmbeds - tRecon, 2, 1).mean()
-		m.logDict({'loss/Recon': self.lossRec})
+		lEmbeds = [v.lBtmOut[i] for i in self.setAPs]
+		_, self.vReconLoss = self.getRecon(lEmbeds)
+		m.logDict({'loss/ReconTrain': self.vReconLoss})
 
 		# # 投毒操作
 
-		for i in range(self.nAP):
+		for i in self.setAPs:
 			v.lBtmOut[i] = v.lBtmOut[i].clone()  # 避免 In-place 操作错误
 
 		# 目标类样本（目的样本 -> 来源样本，建立目标类与来源样本的联系）
-
 		if len(self.aDstPos) > 0:  # 如果找到投毒目的样本
 			#! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			lEmbeds = [v.lBtmOut[i][self.aDstPos].detach() for i in range(self.nAP)]
+			lEmbeds = [v.lBtmOut[i][self.aDstPos].detach() for i in self.setAPs]
 			lRecons, _ = self.getRecon(lEmbeds, self.args.fTrainAlpha)
-			for i in range(self.nAP):
+			for i in self.setAPs:
 				v.lBtmOut[i][self.aDstPos] = lRecons[i]
 
 		# 受害类样本
-
 		# if len(self.aVicPos) > 0:  #! 对受害类样本添加不完全触发器不应该触发后门
 		# 	# 选择投毒来源样本（属于受害类样本）的位置
 		# 	aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.1), False)
@@ -180,7 +179,7 @@ class SGBACb(VFLCallback):
 	@override
 	def onTrainTopInsGrad(self, m: BaseVFLArch, v: StepVars) -> None:
 		if m.current_epoch > 0:
-			self.doSur(m, v)
+			# self.doSur(m, v)
 			self.doSGBA(m, v)
 
 	def doSur(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -250,10 +249,10 @@ class SGBACb(VFLCallback):
 	def doSGBA(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""SGBA 攻击"""
 		p = segment(m.current_epoch, (15, 20), self.args.lLossScales)
-		m.manual_backward(self.lossRec * p, retain_graph=True)
+		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
 		if len(self.aDstPos) > 0:  # 如果找到投毒目标
-			for i in range(self.nAP):
+			for i in self.setAPs:
 				value = segment(m.current_epoch, (15, 20), self.args.lGradScales)
 				v.lTopInsGrad[i][self.aDstPos] *= value
 
@@ -279,15 +278,14 @@ class SGBACb(VFLCallback):
 
 	@override
 	def onValBtmOut(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
-		alpha = self.args.fValAlpha
 		v = d['Attack']
 
-		lEmbeds = v.lBtmOut[: self.nAP]
-		lRecons, loss = self.getRecon(lEmbeds, alpha)
-		for i in range(self.nAP):
+		lEmbeds = [v.lBtmOut[i] for i in self.setAPs]
+		lRecons, vReconLoss = self.getRecon(lEmbeds, self.args.fValAlpha)
+		for i in self.setAPs:
 			v.lBtmOut[i] = lRecons[i]
 
-		m.logDict({'loss/Pattern': loss})
+		m.logDict({'loss/ReconVal': vReconLoss})
 
 	@override
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
@@ -297,7 +295,7 @@ class SGBACb(VFLCallback):
 			m.logDict({f'entropy/Val{k}': entropy})
 
 			if m.current_epoch > 0:
-				self.logSur(m, v, k)
+				#! self.logSur(m, v, k)
 				self.logSGBA(m, v, k)
 
 	def logSur(self, m: BaseVFLArch, v: StepVars, k: str) -> None:

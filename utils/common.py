@@ -15,15 +15,19 @@ import numpy.typing as npt
 import torch as tc
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
+import torch.optim.lr_scheduler as lrs
 
 __all__ = [
 	'F',
 	'L',
 	'Path',
 	'copy',
+	'lrs',
 	'math',
 	'nn',
 	'np',
 	'npt',
+	'optim',
 	'tc',
 ]

@@ -43,6 +43,10 @@ class VFLArch(BaseVFLArch):
 	# ============
 
 	@override
+	def onFitStart(self, m: BaseVFLArch) -> None:
+		m.logText.info(m.trainer.log_dir)
+
+	@override
 	def onTrainStepVars(self, m: BaseVFLArch, v: StepVars) -> None:
 		[v.images, v.labels, v.indices] = v.batch
 
