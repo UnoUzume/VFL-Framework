@@ -211,8 +211,6 @@ class SGBACb(VFLCallback):
 
 		m.logDict({'lossSur/Sur': tSurLoss, 'lossSur/Grad': vGradLoss, 'lossSur/Model': vModelLoss})
 
-		return
-
 		# # 投毒操作
 
 		# 受害类样本（目的标签 <- 来源标签，建立目标类与来源样本的联系）
@@ -232,29 +230,29 @@ class SGBACb(VFLCallback):
 			tTgtLabels = tc.full_like(tSurLabels[aSrcPos], m.ns.iTgtLabel)
 			vCELoss = self.criSur(tSurOut, tTgtLabels)
 			vEntropy = -(F.softmax(tSurOut, 1) * F.log_softmax(tSurOut, 1)).sum(1).mean()
-			[tGrad] = tc.autograd.grad(2 * vCELoss - 2 * vEntropy, [tSurIns])
+			[tGrad] = tc.autograd.grad(0.1 * vCELoss - 1 * vEntropy, [tSurIns])  #! vEntropy1 太小
 			m.manual_backward(tPoison, tGrad, retain_graph=True)
 			m.logDict({'loss/SurVic': vCELoss, 'loss/SurVicEntropy': vEntropy})
 
 		#! 对受害类样本添加不完全触发器不应该触发后门
 
-		# if len(self.aVicPos) > 0:
-		# 	with tc.no_grad():
-		# 		aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.02), False)
-		# 		lEmbeds = [t[aSrcPos] for t in v.lBtmOut[: self.nAP + 1]]
+		if len(self.aVicPos) > 0:
+			with tc.no_grad():
+				aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.05), False)
+				lEmbeds = [v.lBtmOut[i][aSrcPos] for i in self.lAPs]
 
-		# 	lRecons, _ = self.getRecon(lEmbeds[: self.nAP], self.args.fTrainAlpha)
-		# 	tWhichAP = tc.randint(self.nAP, (len(lEmbeds[0]),))  # 只有单个 AP 进行投毒
-		# 	for i in range(self.nAP):
-		# 		lEmbeds[i][tWhichAP == i] = lRecons[i][tWhichAP == i]
-		# 	tPoison = tc.cat(lEmbeds, 1)
+			lRecons, _ = self.getRecon(lEmbeds[: len(self.lRPs)], self.args.fTrainAlpha)
+			tWhichAP = tc.randint(len(self.lRPs), (len(lEmbeds[0]),))  # 只有单个 RP 进行投毒
+			for i in self.lRPs:
+				lEmbeds[i][tWhichAP == i] = lRecons[i][tWhichAP == i]
+			tPoison = tc.cat(lEmbeds, 1)
 
-		# 	tSurIns = tPoison.detach()
-		# 	tSurOut = self.zSurNet(tSurIns)
-		# 	vCELoss = self.criSur(tSurOut, tSurLabels[aSrcPos])
-		# 	[tGrad] = tc.autograd.grad(vCELoss, tSurIns)
-		# 	m.manual_backward(tPoison, tGrad, retain_graph=True)
-		# 	m.logDict({'loss/SurVicPart': vCELoss})
+			tSurIns = tPoison.detach().requires_grad_()
+			tSurOut = self.zSurNet(tSurIns)
+			vCELoss = self.criSur(tSurOut, tSurLabels[aSrcPos])
+			[tGrad] = tc.autograd.grad(15 * vCELoss, tSurIns)  #! 15 太大
+			m.manual_backward(tPoison, tGrad, retain_graph=True)
+			m.logDict({'loss/SurVicPart': vCELoss})
 
 	def doSGBA(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""SGBA 攻击"""
