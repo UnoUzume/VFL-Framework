@@ -74,8 +74,9 @@ class SGBACb(VFLCallback):
 		return [optRec], [lrsRec]
 
 	def getRecon(self, tEmbed: tc.Tensor, alpha: float = 1.0) -> tuple[tc.Tensor, tc.Tensor]:
-		tRecon = self.zRecNet(tEmbed) * alpha + tEmbed * (1 - alpha)
-		vLoss = tc.norm(tEmbed - tRecon, 2, 1).mean()
+		tRecOut = self.zRecNet(tEmbed)
+		vLoss = tc.norm(tEmbed - tRecOut, 2, 1).mean()
+		tRecon = tRecOut * alpha + tEmbed * (1 - alpha)
 
 		# self.lossRec = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)
 		return tRecon, vLoss
@@ -135,6 +136,7 @@ class SGBACb(VFLCallback):
 			tEmbed = v.lBtmOut[0][self.aDstPos].detach()
 			tRecon, _ = self.getRecon(tEmbed, self.args.fTrainAlpha)
 			v.lBtmOut[0][self.aDstPos] = tRecon
+		# 受害类样本
 
 	@override
 	def onTrainLoss(self, m: BaseVFLArch, v: StepVars) -> None:

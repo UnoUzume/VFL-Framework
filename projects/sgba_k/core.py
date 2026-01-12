@@ -67,8 +67,8 @@ class SGBACb(VFLCallback):
 		self.args = args
 		self.cfg = config
 
-		self.lRPs = [0]
-		self.lSPs = [1]
+		self.lRPs = [0, 1, 2]
+		self.lSPs = [3]
 		self.lAPs = self.lRPs + self.lSPs
 
 		lPartyDims = self.cfg.model.lPartyDims
@@ -105,7 +105,7 @@ class SGBACb(VFLCallback):
 		lRecOut = list(tc.split(tRecOut, lDims, 1))
 
 		lLoss = [tc.norm(a - b, 2, 1).mean() for a, b in zip(lEmbeds, lRecOut, strict=True)]
-		vLoss = tc.Tensor(lLoss).sum()
+		vLoss = tc.sum(tc.stack(lLoss))
 
 		tRecon = tRecOut * alpha + tEmbed * (1 - alpha)
 		lRecons = list(tc.split(tRecon, lDims, 1))
@@ -187,7 +187,7 @@ class SGBACb(VFLCallback):
 	@override
 	def onTrainTopInsGrad(self, m: BaseVFLArch, v: StepVars) -> None:
 		if m.current_epoch > 0:
-			# self.doSur(m, v)
+			self.doSur(m, v)
 			self.doSGBA(m, v)
 
 	def doSur(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -210,6 +210,8 @@ class SGBACb(VFLCallback):
 		m.manual_backward(tSurLoss, retain_graph=True)
 
 		m.logDict({'lossSur/Sur': tSurLoss, 'lossSur/Grad': vGradLoss, 'lossSur/Model': vModelLoss})
+
+		return
 
 		# # 投毒操作
 
@@ -260,8 +262,8 @@ class SGBACb(VFLCallback):
 		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
 		if len(self.aDstPos) > 0:  # 如果找到投毒目标
+			value = segment(m.current_epoch, (15, 20), self.args.lGradScales)
 			for i in self.lRPs:
-				value = segment(m.current_epoch, (15, 20), self.args.lGradScales)
 				v.lTopInsGrad[i][self.aDstPos] *= value
 
 		# if len(self.aSrcPos2) > 0:
@@ -288,7 +290,7 @@ class SGBACb(VFLCallback):
 	def onValBtmOut(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		v = d['Attack']
 
-		lEmbeds = [v.lBtmOut[i] for i in self.lRPs]
+		lEmbeds = selectByList(v.lBtmOut, self.lRPs)
 		lRecons, vReconLoss = self.getRecon(lEmbeds, self.args.fValAlpha)
 		for i in self.lRPs:
 			v.lBtmOut[i] = lRecons[i]
@@ -303,7 +305,7 @@ class SGBACb(VFLCallback):
 			m.logDict({f'entropy/Val{k}': entropy})
 
 			if m.current_epoch > 0:
-				#! self.logSur(m, v, k)
+				self.logSur(m, v, k)
 				self.logSGBA(m, v, k)
 
 	def logSur(self, m: BaseVFLArch, v: StepVars, k: str) -> None:

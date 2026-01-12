@@ -27,12 +27,12 @@ def main(lTopDims: list[int]) -> None:
 
 	# 方法参数
 	args = MethodArgs(
-		fRecLr=1e-3,
+		fRecLr=5e-4,
 		fSurLr=1e-3,
-		fTrainAlpha=0.5,
+		fTrainAlpha=0.3,
 		fValAlpha=0.8,
-		lLossScales=(0.01, 0.1),
-		lGradScales=(10.0, 5.0),
+		lLossScales=(1e-4, 10e-3),
+		lGradScales=(15.0, 5.0),
 	)
 
 	# 模型架构
