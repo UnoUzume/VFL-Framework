@@ -96,24 +96,24 @@ class SGBACb(VFLCallback):
 		self.aDstPos = aDstPos
 		aVicPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aVicIdxs))  #: aBatchIdxs_VicPos
 
-		# if len(aDstPos) > 0 and len(aVicPos) > 0:
-		# 	# 选择投毒来源样本（属于受害类样本）的位置
-		# 	aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
-		# 	for dst, src in zip(aDstPos, aSrcPos, strict=True):
-		# 		v.lBtmIns[0][dst] = v.lBtmIns[0][src]
+		if len(aDstPos) > 0 and len(aVicPos) > 0:
+			# 选择投毒来源样本（属于受害类样本）的位置
+			aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
+			for dst, src in zip(aDstPos, aSrcPos, strict=True):
+				v.lBtmIns[0][dst] = v.lBtmIns[0][src]
 
-		if len(aDstPos) > 0:  # 如果找到投毒目标
-			# 寻找投毒目标对应的 self.aDstIdxs 的元素位置，同时作为 self.aSrcIdxs 的元素位置
-			aSrcIdxs_Pos = _aDstIdxs_Pos = np.where(aBatchIdxs[aDstPos, None] == m.ns.aDstIdxs)[1]
-			# 获取投毒来源的元素
-			aSrcIdxsSubset = m.ns.aSrcIdxs[aSrcIdxs_Pos]
+		# if len(aDstPos) > 0:  # 如果找到投毒目标
+		# 	# 寻找投毒目标对应的 self.aDstIdxs 的元素位置，同时作为 self.aSrcIdxs 的元素位置
+		# 	aSrcIdxs_Pos = _aDstIdxs_Pos = np.where(aBatchIdxs[aDstPos, None] == m.ns.aDstIdxs)[1]
+		# 	# 获取投毒来源的元素
+		# 	aSrcIdxsSubset = m.ns.aSrcIdxs[aSrcIdxs_Pos]
 
-			for pos, src_idx in zip(self.aDstPos, aSrcIdxsSubset, strict=True):
-				image = m.module.dsTrain[src_idx.item()][0]  # pyright: ignore[reportAttributeAccessIssue]
+		# 	for pos, src_idx in zip(self.aDstPos, aSrcIdxsSubset, strict=True):
+		# 		image = m.module.dsTrain[src_idx.item()][0]  # pyright: ignore[reportAttributeAccessIssue]
 
-				parts = m.module.fnSplit(image.unsqueeze(0), m.module.nParty)
-				parts = [m.module.tfCurrent(part) for part in parts]
-				v.lBtmIns[0][pos] = parts[0]
+		# 		parts = m.module.fnSplit(image.unsqueeze(0), m.module.nParty)
+		# 		parts = [m.module.tfCurrent(part) for part in parts]
+		# 		v.lBtmIns[0][pos] = parts[0]
 
 	@override
 	def onTrainBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:

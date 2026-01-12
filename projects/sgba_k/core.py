@@ -17,6 +17,10 @@ from utils.misc import accuracy, segment
 # TODO: attackBtmIns getRecon
 
 
+def selectByList[T](lTensors: list[T], lIndices: list[int]) -> list[T]:
+	return [lTensors[i] for i in lIndices]
+
+
 @dataclass
 class MethodArgs:
 	"""SGBA 攻击方法参数配置类
@@ -63,15 +67,16 @@ class SGBACb(VFLCallback):
 		self.args = args
 		self.cfg = config
 
-		self.setAPs = {0, 1, 2}  #: setAttackPartys
-		self.setRPs = {3}  #: setReferencePartys
+		self.lRPs = [0]
+		self.lSPs = [1]
+		self.lAPs = self.lRPs + self.lSPs
 
 		lPartyDims = self.cfg.model.lPartyDims
-		nDim = sum(lPartyDims[i] for i in self.setAPs)
+		nDim = sum(selectByList(lPartyDims, self.lRPs))
 		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  #! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
-		self.zSurNet = FCN([sum(lPartyDims[i] for i in self.setAPs | self.setRPs), 256, 10])
+		self.zSurNet = FCN([sum(selectByList(lPartyDims, self.lAPs)), 256, 10])
 		self.criSur = nn.CrossEntropyLoss()
 
 	@override
@@ -96,11 +101,14 @@ class SGBACb(VFLCallback):
 		tEmbed = tc.cat(lEmbeds, 1)
 		lDims = [t.size(1) for t in lEmbeds]
 
-		tRecon = self.zRecNet(tEmbed) * alpha + tEmbed * (1 - alpha)
-		lRecons = list(tc.split(tRecon, lDims, 1))
+		tRecOut = self.zRecNet(tEmbed)
+		lRecOut = list(tc.split(tRecOut, lDims, 1))
 
-		# vLoss = tc.norm(tEmbed - tRecon, 2, 1).mean().item()
-		vLoss = tc.sum([tc.norm(a - b, 2, 1).mean() for a, b in zip(lEmbeds, lRecons, strict=True)])
+		lLoss = [tc.norm(a - b, 2, 1).mean() for a, b in zip(lEmbeds, lRecOut, strict=True)]
+		vLoss = tc.Tensor(lLoss).sum()
+
+		tRecon = tRecOut * alpha + tEmbed * (1 - alpha)
+		lRecons = list(tc.split(tRecon, lDims, 1))
 
 		# self.lossRec = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)
 		return lRecons, vLoss
@@ -127,7 +135,7 @@ class SGBACb(VFLCallback):
 			# 选择投毒来源样本（属于受害类样本）的位置
 			aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
 			for dst, src in zip(aDstPos, aSrcPos, strict=True):
-				for i in self.setAPs:
+				for i in self.lRPs:
 					v.lBtmIns[i][dst] = v.lBtmIns[i][src]
 
 	@override
@@ -137,21 +145,21 @@ class SGBACb(VFLCallback):
 
 	def attackBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
 		#! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
-		lEmbeds = [v.lBtmOut[i] for i in self.setAPs]
+		lEmbeds = selectByList(v.lBtmOut, self.lRPs)
 		_, self.vReconLoss = self.getRecon(lEmbeds)
 		m.logDict({'loss/ReconTrain': self.vReconLoss})
 
 		# # 投毒操作
 
-		for i in self.setAPs:
+		for i in self.lRPs:
 			v.lBtmOut[i] = v.lBtmOut[i].clone()  # 避免 In-place 操作错误
 
 		# 目标类样本（目的样本 -> 来源样本，建立目标类与来源样本的联系）
 		if len(self.aDstPos) > 0:  # 如果找到投毒目的样本
 			#! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			lEmbeds = [v.lBtmOut[i][self.aDstPos].detach() for i in self.setAPs]
+			lEmbeds = [t[self.aDstPos].detach() for t in selectByList(v.lBtmOut, self.lRPs)]
 			lRecons, _ = self.getRecon(lEmbeds, self.args.fTrainAlpha)
-			for i in self.setAPs:
+			for i in self.lRPs:
 				v.lBtmOut[i][self.aDstPos] = lRecons[i]
 
 		# 受害类样本
@@ -185,7 +193,7 @@ class SGBACb(VFLCallback):
 	def doSur(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""代理模型训练"""
 		# 模型损失
-		tSurIns = tc.cat(v.lTopIns[: self.nAP + 1], 1).detach().requires_grad_()
+		tSurIns = tc.cat(selectByList(v.lTopIns, self.lAPs), 1).detach().requires_grad_()
 		tSurOut = self.zSurNet(tSurIns)
 
 		tSurLabels = m.ns.tPreds[tc.searchsorted(m.ns.tIDs, v.indices)]
@@ -194,7 +202,7 @@ class SGBACb(VFLCallback):
 
 		# 梯度损失
 		[tSurGrad] = tc.autograd.grad(vModelLoss, [tSurIns], create_graph=True)
-		tRawGrad = tc.cat(v.lTopInsGrad[: self.nAP + 1], 1)
+		tRawGrad = tc.cat(selectByList(v.lTopInsGrad, self.lAPs), 1)
 		vGradLoss = tc.norm(tSurGrad - tRawGrad, 2)
 
 		# 总损失
@@ -210,11 +218,11 @@ class SGBACb(VFLCallback):
 		if len(self.aVicPos) > 0:
 			with tc.no_grad():
 				aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.05), False)
-				lEmbeds = [t[aSrcPos] for t in v.lBtmOut[: self.nAP + 1]]
+				lEmbeds = [v.lBtmOut[i][aSrcPos] for i in self.lAPs]
 				# tClean = tc.cat(lEmbeds, 1)
 
-			lRecons, _ = self.getRecon(lEmbeds[: self.nAP], self.args.fTrainAlpha)
-			lEmbeds = [*lRecons, lEmbeds[self.nAP]]
+			lRecons, _ = self.getRecon(lEmbeds[: len(self.lRPs)], self.args.fTrainAlpha)
+			lEmbeds = [*lRecons, *lEmbeds[len(self.lRPs) :]]
 			tPoison = tc.cat(lEmbeds, 1)
 
 			tSurIns = tPoison.detach().requires_grad_()
@@ -252,7 +260,7 @@ class SGBACb(VFLCallback):
 		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
 		if len(self.aDstPos) > 0:  # 如果找到投毒目标
-			for i in self.setAPs:
+			for i in self.lRPs:
 				value = segment(m.current_epoch, (15, 20), self.args.lGradScales)
 				v.lTopInsGrad[i][self.aDstPos] *= value
 
@@ -280,9 +288,9 @@ class SGBACb(VFLCallback):
 	def onValBtmOut(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		v = d['Attack']
 
-		lEmbeds = [v.lBtmOut[i] for i in self.setAPs]
+		lEmbeds = [v.lBtmOut[i] for i in self.lRPs]
 		lRecons, vReconLoss = self.getRecon(lEmbeds, self.args.fValAlpha)
-		for i in self.setAPs:
+		for i in self.lRPs:
 			v.lBtmOut[i] = lRecons[i]
 
 		m.logDict({'loss/ReconVal': vReconLoss})
@@ -299,7 +307,7 @@ class SGBACb(VFLCallback):
 				self.logSGBA(m, v, k)
 
 	def logSur(self, m: BaseVFLArch, v: StepVars, k: str) -> None:
-		tSurIns = tc.cat(v.lTopIns[: self.nAP + 1], 1)
+		tSurIns = tc.cat(selectByList(v.lTopIns, self.lAPs), 1)
 		tSurOut = self.zSurNet(tSurIns)
 
 		[acc1, acc3] = accuracy(tSurOut, v.labels, (1, 3))
