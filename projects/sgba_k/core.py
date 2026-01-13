@@ -217,7 +217,7 @@ class SGBACb(VFLCallback):
 
 		if len(self.aVicPos) > 0:
 			with tc.no_grad():
-				aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.05), False)
+				aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.1), False)
 				lEmbeds = [v.lBtmOut[i][aSrcPos] for i in self.lAPs]
 				# tClean = tc.cat(lEmbeds, 1)
 
@@ -230,7 +230,7 @@ class SGBACb(VFLCallback):
 			tTgtLabels = tc.full_like(tSurLabels[aSrcPos], m.ns.iTgtLabel)
 			vCELoss = self.criSur(tSurOut, tTgtLabels)
 			vEntropy = -(F.softmax(tSurOut, 1) * F.log_softmax(tSurOut, 1)).sum(1).mean()
-			[tGrad] = tc.autograd.grad(0.1 * vCELoss - 1 * vEntropy, [tSurIns])  #! vEntropy1 太小
+			[tGrad] = tc.autograd.grad(1 * vCELoss - 5 * vEntropy, [tSurIns])  #! vEntropy 5 太小
 			m.manual_backward(tPoison, tGrad, retain_graph=True)
 			m.logDict({'loss/SurVic': vCELoss, 'loss/SurVicEntropy': vEntropy})
 
@@ -238,7 +238,7 @@ class SGBACb(VFLCallback):
 
 		if len(self.aVicPos) > 0:
 			with tc.no_grad():
-				aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.05), False)
+				aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.1), False)
 				lEmbeds = [v.lBtmOut[i][aSrcPos] for i in self.lAPs]
 
 			lRecons, _ = self.getRecon(lEmbeds[: len(self.lRPs)], self.args.fTrainAlpha)
@@ -250,7 +250,7 @@ class SGBACb(VFLCallback):
 			tSurIns = tPoison.detach().requires_grad_()
 			tSurOut = self.zSurNet(tSurIns)
 			vCELoss = self.criSur(tSurOut, tSurLabels[aSrcPos])
-			[tGrad] = tc.autograd.grad(15 * vCELoss, tSurIns)  #! 15 太大
+			[tGrad] = tc.autograd.grad(15 * vCELoss, tSurIns)
 			m.manual_backward(tPoison, tGrad, retain_graph=True)
 			m.logDict({'loss/SurVicPart': vCELoss})
 
