@@ -175,6 +175,12 @@ class VFLCallback:
 		常用于梯度反转攻击、梯度加噪防御。
 		"""
 
+	def onTrainBtmOutGrad(self, m: 'BaseVFLArch', v: StepVars) -> None:
+		"""在底层模型反向传播后，获得对输出特征的梯度 (`v.lBtmOutGrad`) 时调用。
+
+		常用于梯度反转攻击、梯度加噪防御。
+		"""
+
 	def onTrainOptimStep(self, m: 'BaseVFLArch', v: StepVars) -> None:
 		"""在优化器更新参数 (`step()`) 后调用。"""
 

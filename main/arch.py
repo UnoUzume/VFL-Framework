@@ -302,13 +302,15 @@ class BaseVFLArch(LightningArch, VFLCallback, ABC):
 
 		# 6.2 顶部模型反向传播
 		self.manual_backward(v.loss)
-
-		# 6.3 梯度传输（顶部模型 -> 底部模型）
 		v.lTopInsGrad = [notNone(ti.grad) for ti in v.lTopIns]
 		self._executeCallback(VFLCallback.onTrainTopInsGrad, v)
 
+		# 6.3 梯度传输（顶部模型 -> 底部模型）
+		v.lBtmOutGrad = [t.clone() for t in v.lTopInsGrad]
+		self._executeCallback(VFLCallback.onTrainBtmOutGrad, v)
+
 		# 6.4 底部模型反向传播
-		for out, grad in zip(v.lBtmOut, v.lTopInsGrad, strict=True):
+		for out, grad in zip(v.lBtmOut, v.lBtmOutGrad, strict=True):
 			self.manual_backward(out, grad, retain_graph=True)
 
 		# 7. 优化器更新

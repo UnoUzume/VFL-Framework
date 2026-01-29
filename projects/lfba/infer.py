@@ -108,7 +108,7 @@ class InferCb(VFLCallback):
 	def onTrainTopInsGrad(self, m: BaseVFLArch, v: StepVars) -> None:
 		self.collector.addBatch(
 			{'grads': tc.cat(v.lTopInsGrad[:4], 1), 'labels': v.labels, 'ids': v.indices}
-		)
+		)  # TODO(UnoUzume): 每个参与者可以各自进行
 
 	@override
 	def onTrainEpochEnd(self, m: BaseVFLArch) -> None:
@@ -128,14 +128,11 @@ class InferCb(VFLCallback):
 	def infer(self, m: BaseVFLArch, data: dict[str, tc.Tensor]) -> None:
 		"""执行受控精度的推理逻辑"""
 		tMask = tc.isin(data['ids'], tc.as_tensor(self.lIDs).to(data['ids']))
-		tPreds, _ = inferAllClasses(data['grads'], data['grads'][tMask], data['labels'][tMask])
-		m.logText.info(f'准确率：{tc.eq(tPreds, data["labels"]).float().mean():.2%}')
+		tInfers, _ = inferAllClasses(data['grads'], data['grads'][tMask], data['labels'][tMask])
+		m.logText.info(f'准确率：{tc.eq(tInfers, data["labels"]).float().mean():.2%}')
 
-		tIDs_, tIndices = tc.sort(data['ids'])
-		tPreds_ = tPreds[tIndices]
+		m.ns.tIDs, tIndices = tc.sort(data['ids'])
+		m.ns.tInfers = tInfers[tIndices]
 
-		m.ns.tIDs = tIDs_
-		m.ns.tPreds = tPreds_
-
-		m.ns.tTgtIdxs = m.ns.tIDs[m.ns.tPreds == m.ns.iTgtLabel]
-		m.ns.tVicIdxs = m.ns.tIDs[m.ns.tPreds != m.ns.iTgtLabel]
+		m.ns.tTgtIdxs = m.ns.tIDs[m.ns.tInfers == m.ns.iTgtLabel]
+		m.ns.tVicIdxs = m.ns.tIDs[m.ns.tInfers != m.ns.iTgtLabel]

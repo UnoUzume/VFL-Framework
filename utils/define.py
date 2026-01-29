@@ -150,10 +150,12 @@ class StepVars:
 	lBtmOut: list[tc.Tensor] = field(default_factory=list)
 	"""本地模型输出"""
 	lTopIns: list[tc.Tensor] = field(default_factory=list)
-	"""全局模型输入"""
+	"""全局模型输入，属于隐私信息"""
 	zTopOut: tc.Tensor = field(default_factory=defaultTensor)
-	"""全局模型输出"""
+	"""全局模型输出，属于隐私信息"""
 	loss: tc.Tensor = field(default_factory=defaultTensor)
-	"""损失"""
+	"""损失，属于隐私信息"""
 	lTopInsGrad: list[tc.Tensor] = field(default_factory=list)
-	"""全局模型输入梯度"""
+	"""全局模型输入梯度，属于隐私信息"""
+	lBtmOutGrad: list[tc.Tensor] = field(default_factory=list)
+	"""本地模型输出梯度"""

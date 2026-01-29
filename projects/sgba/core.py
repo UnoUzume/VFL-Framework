@@ -9,8 +9,7 @@ from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE, VFLCallback
 from models.fcn import FCN
 from projects.vfl.config import AppConfig
-from utils.common import F, copy, np, tc
-from utils.config import rng
+from utils.common import F, copy, tc
 from utils.define import StepVars
 from utils.misc import accuracy, segment
 
@@ -74,11 +73,21 @@ class SGBACb(VFLCallback):
 		return [optRec], [lrsRec]
 
 	def getRecon(self, tEmbed: tc.Tensor, alpha: float = 1.0) -> tuple[tc.Tensor, tc.Tensor]:
-		tRecOut = self.zRecNet(tEmbed)
-		vLoss = tc.norm(tEmbed - tRecOut, 2, 1).mean()
-		tRecon = tRecOut * alpha + tEmbed * (1 - alpha)
+		"""根据输入嵌入生成重构输出。
 
-		# self.lossRec = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)
+		Args:
+			tEmbed: 输入嵌入
+			alpha: 重构输出的混合比例，默认为 `1.0`
+
+		Returns:
+			重构输出
+			重构损失值
+		"""
+		tRecOut = self.zRecNet(tEmbed)
+		tRecon = tRecOut * alpha + tEmbed * (1 - alpha)
+		# vLoss = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)  # MSE Loss
+		vLoss = tc.norm(tRecOut - tEmbed, 2, 1).mean()  # L2 Loss
+
 		return tRecon, vLoss
 
 	# ============
@@ -88,21 +97,31 @@ class SGBACb(VFLCallback):
 	@override
 	def onTrainBtmIns(self, m: BaseVFLArch, v: StepVars) -> None:
 		if m.current_epoch > 0:
-			self.attackBtmIns(m, v)
+			self.switch(m, v)
 
-	def attackBtmIns(self, m: BaseVFLArch, v: StepVars) -> None:
-		# 获取当前批次中投毒目的样本、非目标类样本的位置（索引的索引）
-		aBatchIdxs = v.indices.cpu().numpy()
-		aDstPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aDstIdxs))  #: aBatchIdxs_DstPos
-		self.aDstPos = aDstPos
-		aVicPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aVicIdxs))  #: aBatchIdxs_VicPos
+	def switch(self, m: BaseVFLArch, v: StepVars) -> None:
+		"""用于恶意关联的样本切换"""
+		# 获取投毒目的样本（属于目标类样本）的掩码
+		self.tDstMask = tc.isin(v.indices, m.ns.tDstIdxs)
+		# 获取受害类样本的掩码
+		self.tVicMask = tc.isin(v.indices, m.ns.tVicIdxs)
 
-		if len(aDstPos) > 0 and len(aVicPos) > 0:
-			# 选择投毒来源样本（属于受害类样本）的位置
-			aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
-			for dst, src in zip(aDstPos, aSrcPos, strict=True):
-				v.lBtmIns[0][dst] = v.lBtmIns[0][src]
+		# 批次内部样本切换
+		if self.tDstMask.any() and self.tVicMask.any():
+			# 获取投毒目的样本（属于目标类样本）的位置（索引的索引）
+			tDstPos = tc.nonzero(self.tDstMask, as_tuple=True)[0]
+			# 获取受害类样本的位置（索引的索引）
+			tVicPos = tc.nonzero(self.tVicMask, as_tuple=True)[0]
 
+			# 有放回抽取
+			tSelect = tc.randint(0, tVicPos.size(0), (tDstPos.size(0),), device=tVicPos.device)
+			# 无放回抽取，但是来源可能少于目标
+			# tSelect = tc.randperm(tVicPos.size(0), device=tVicPos.device)[: tDstPos.size(0)]
+
+			# 批量样本切换
+			v.lBtmIns[0][tDstPos] = v.lBtmIns[0][tVicPos[tSelect]]
+
+		# 整个训练集样本切换
 		# if len(aDstPos) > 0:  # 如果找到投毒目标
 		# 	# 寻找投毒目标对应的 self.aDstIdxs 的元素位置，同时作为 self.aSrcIdxs 的元素位置
 		# 	aSrcIdxs_Pos = _aDstIdxs_Pos = np.where(aBatchIdxs[aDstPos, None] == m.ns.aDstIdxs)[1]
@@ -119,9 +138,10 @@ class SGBACb(VFLCallback):
 	@override
 	def onTrainBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
 		if m.current_epoch > 0:
-			self.attackBtmOut(m, v)
+			self.poison(m, v)
 
-	def attackBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
+	def poison(self, m: BaseVFLArch, v: StepVars) -> None:
+		"""用于嵌入隐蔽性的生成式投毒"""
 		#! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
 		tEmbed = v.lBtmOut[0]
 		_, self.vReconLoss = self.getRecon(tEmbed)
@@ -131,12 +151,11 @@ class SGBACb(VFLCallback):
 		v.lBtmOut[0] = v.lBtmOut[0].clone()  # 避免 In-place 操作错误
 
 		# 目标类样本（目的样本 -> 来源样本，建立目标类与来源样本的联系）
-		if len(self.aDstPos) > 0:  # 如果找到投毒目的样本
+		if self.tDstMask.any():  # 如果找到投毒目的样本
 			#! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			tEmbed = v.lBtmOut[0][self.aDstPos].detach()
+			tEmbed = v.lBtmOut[0][self.tDstMask].detach()
 			tRecon, _ = self.getRecon(tEmbed, self.args.fTrainAlpha)
-			v.lBtmOut[0][self.aDstPos] = tRecon
-		# 受害类样本
+			v.lBtmOut[0][self.tDstMask] = tRecon
 
 	@override
 	def onTrainLoss(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -144,7 +163,7 @@ class SGBACb(VFLCallback):
 		optRec.zero_grad()
 
 	@override
-	def onTrainTopInsGrad(self, m: BaseVFLArch, v: StepVars) -> None:
+	def onTrainBtmOutGrad(self, m: BaseVFLArch, v: StepVars) -> None:
 		if m.current_epoch > 0:
 			self.doSGBA(m, v)
 
@@ -153,9 +172,9 @@ class SGBACb(VFLCallback):
 		p = segment(m.current_epoch, (15, 20), self.args.lLossScales)
 		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
-		if len(self.aDstPos) > 0:  # 如果找到投毒目标
+		if self.tDstMask.any():  # 如果找到投毒目标
 			value = segment(m.current_epoch, (15, 20), self.args.lGradScales)
-			v.lTopInsGrad[0][self.aDstPos] *= value
+			v.lTopInsGrad[0][self.tDstMask] *= value
 
 	@override
 	def onTrainOptimStep(self, m: BaseVFLArch, v: StepVars) -> None:
