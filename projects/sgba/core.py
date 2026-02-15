@@ -59,7 +59,7 @@ class SGBACb(VFLCallback):
 		self.cfg = config
 
 		nDim = self.cfg.model.lPartyDims[0]
-		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  #! 可变
+		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  # ! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
 	@override
@@ -83,8 +83,11 @@ class SGBACb(VFLCallback):
 			重构输出
 			重构损失值
 		"""
+		# 生成重构输出
 		tRecOut = self.zRecNet(tEmbed)
+		# 根据 alpha 混合重构输出
 		tRecon = tRecOut * alpha + tEmbed * (1 - alpha)
+		# 计算重构损失
 		# vLoss = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)  # MSE Loss
 		vLoss = tc.norm(tRecOut - tEmbed, 2, 1).mean()  # L2 Loss
 
@@ -142,7 +145,7 @@ class SGBACb(VFLCallback):
 
 	def poison(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""用于嵌入隐蔽性的生成式投毒"""
-		#! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
+		# ! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
 		tEmbed = v.lBtmOut[0]
 		_, self.vReconLoss = self.getRecon(tEmbed)
 		m.logDict({'loss/ReconTrain': self.vReconLoss})
@@ -152,7 +155,7 @@ class SGBACb(VFLCallback):
 
 		# 目标类样本（目的样本 -> 来源样本，建立目标类与来源样本的联系）
 		if self.tDstMask.any():  # 如果找到投毒目的样本
-			#! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
+			# ! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
 			tEmbed = v.lBtmOut[0][self.tDstMask].detach()
 			tRecon, _ = self.getRecon(tEmbed, self.args.fTrainAlpha)
 			v.lBtmOut[0][self.tDstMask] = tRecon

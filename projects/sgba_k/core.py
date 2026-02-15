@@ -17,8 +17,8 @@ from utils.misc import accuracy, segment
 # TODO: attackBtmIns getRecon
 
 
-def sublistByIndices[T](lTensors: list[T], lIndices: list[int]) -> list[T]:
-	return [lTensors[i] for i in lIndices]
+def sublist[T](lThis: list[T], lIndices: list[int]) -> list[T]:
+	return [lThis[i] for i in lIndices]
 
 
 @dataclass
@@ -72,11 +72,11 @@ class SGBACb(VFLCallback):
 		self.lAPs = self.lRPs + self.lSPs
 
 		lPartyDims = self.cfg.model.lPartyDims
-		nDim = sum(sublistByIndices(lPartyDims, self.lRPs))
-		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  #! 可变
+		nDim = sum(sublist(lPartyDims, self.lRPs))
+		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  # ! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
-		self.zSurNet = FCN([sum(sublistByIndices(lPartyDims, self.lAPs)), 256, 10])
+		self.zSurNet = FCN([sum(sublist(lPartyDims, self.lAPs)), 256, 10])
 		self.criSur = nn.CrossEntropyLoss()
 
 	@override
@@ -166,8 +166,8 @@ class SGBACb(VFLCallback):
 
 	def poison(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""用于嵌入隐蔽性的生成式投毒"""
-		#! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
-		lEmbeds = sublistByIndices(v.lBtmOut, self.lRPs)
+		# ! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
+		lEmbeds = sublist(v.lBtmOut, self.lRPs)
 		_, self.vReconLoss = self.getRecon(lEmbeds)
 		m.logDict({'loss/ReconTrain': self.vReconLoss})
 
@@ -176,10 +176,10 @@ class SGBACb(VFLCallback):
 		for i in self.lRPs:
 			v.lBtmOut[i] = v.lBtmOut[i].clone()  # 避免 In-place 操作错误
 
-		# 目标类样本（目的样本 -> 来源样本，建立目标类与来源样本的联系）
+		# ! 对于目标类（目的样本特征改成来源样本特征，建立目标类与来源样本的联系）
 		if self.tDstMask.any():  # 如果找到投毒目的样本
-			#! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			lEmbeds = [t[self.tDstMask].detach() for t in sublistByIndices(v.lBtmOut, self.lRPs)]
+			# ! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
+			lEmbeds = [t[self.tDstMask].detach() for t in sublist(v.lBtmOut, self.lRPs)]
 			lRecons, _ = self.getRecon(lEmbeds, self.args.fTrainAlpha)
 			for i in self.lRPs:
 				v.lBtmOut[i][self.tDstMask] = lRecons[i]
@@ -211,7 +211,7 @@ class SGBACb(VFLCallback):
 		if m.current_epoch > 0:
 			self.doSGBA(m, v)
 			self.doSurUpdate(m, v)
-			if len(self.tVicMask) > 0:
+			if self.tVicMask.any():
 				self.doSurPoison(m, v)
 
 	def doSGBA(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -230,9 +230,11 @@ class SGBACb(VFLCallback):
 		# 		v.lTopInsGrad[i][self.aSrcPos2] *= value
 
 	def doSurUpdate(self, m: BaseVFLArch, v: StepVars) -> None:
-		"""代理模型训练"""
-		# 获取受控参与者上传的嵌入，拼接，从计算图中分离
-		tSurIns = tc.cat(sublistByIndices(v.lBtmOut, self.lAPs), 1).detach().requires_grad_()
+		"""进行代理模型训练。"""
+		# 获取受控节点上传的嵌入，拼接
+		tSurIns = tc.cat(sublist(v.lBtmOut, self.lAPs), dim=1)
+		# 从计算图中分离
+		tSurIns = tSurIns.detach().requires_grad_()
 		# 输入代理模型，得到 Logits
 		tSurOut = self.zSurNet(tSurIns)
 
@@ -243,76 +245,91 @@ class SGBACb(VFLCallback):
 
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
 		[tSurGrad] = tc.autograd.grad(vModelLoss, [tSurIns], create_graph=True)
-		# 获取受控参与者接收的关于嵌入的梯度，拼接
-		tRawGrad = tc.cat(sublistByIndices(v.lBtmOutGrad, self.lAPs), 1)
+		# 获取受控节点接收的关于嵌入的梯度，拼接
+		tRawGrad = tc.cat(sublist(v.lBtmOutGrad, self.lAPs), dim=1)
 		# 计算代理模型的梯度损失
-		vGradLoss = tc.norm(tSurGrad - tRawGrad, 2)  # L2 损失
+		vGradLoss = tc.norm(tSurGrad - tRawGrad, p=2)  # L2 损失
 
 		# 计算代理模型的总损失
-		tSurLoss = 5 * vModelLoss + 50 * vGradLoss  #! 调整权重
+		tSurLoss = 5 * vModelLoss + 50 * vGradLoss  # ! 调整权重
 		# 执行反向传播，更新代理模型参数
 		m.manual_backward(tSurLoss, retain_graph=True)
 		m.logDict({'lossSur/Sur': tSurLoss, 'lossSur/Grad': vGradLoss, 'lossSur/Model': vModelLoss})
 
 	def doSurPoison(self, m: BaseVFLArch, v: StepVars) -> None:
-		"""投毒操作"""
-		# 获取推理标签
-		tInferLabels = m.ns.tInfers[tc.searchsorted(m.ns.tIDs, v.indices)]
+		"""执行代理模型投毒操作。"""
+		# 初步筛选受害类样本
+		lVicEmbedsRP = [v.lBtmOut[i][self.tVicMask] for i in self.lRPs]
+		lVicEmbedsSP = [v.lBtmOut[i][self.tVicMask] for i in self.lSPs]
+		tVicIndices = v.indices[self.tVicMask]
 
-		#! 受害类样本（目的标签 <- 来源标签，建立目标类与来源样本的联系）
+		def _doSample(ratio: float = 0.1, single: bool = False) -> tuple[tc.Tensor, tc.Tensor]:
+			"""采样并生成恶意嵌入。
 
-		with tc.no_grad():
-			# 选取 10% 数量的受害类样本
-			aSrcPos = rng().choice(self.tVicMask, math.ceil(len(self.tVicMask) * 0.1), False)
-			# 获取受控参与者上传的嵌入
-			lEmbeds = [v.lBtmOut[i][aSrcPos] for i in self.lAPs]
-			# tClean = tc.cat(lEmbeds, 1)
+			Args:
+				ratio: 采样比例，默认为 `0.1`
+				single: 是否仅对单个攻击节点进行投毒，默认为 `False`
 
-		# 只有受控参与者中的攻击节点实施投毒，其余节点的嵌入不变
-		lRecons, _ = self.getRecon(lEmbeds[: len(self.lRPs)], self.args.fTrainAlpha)
-		lEmbeds = [*lRecons, *lEmbeds[len(self.lRPs) :]]
-		tPoison = tc.cat(lEmbeds, 1)
+			Returns:
+				包含恶意嵌入和推理标签的元组
+			"""
+			with tc.no_grad():
+				# 随机选择样本
+				nSamples = math.ceil(ratio * len(tVicIndices))
+				tPerm = tc.randperm(len(tVicIndices), device=m.device)[:nSamples]
+
+				# 获取受控节点的嵌入
+				lSampleRP = [t[tPerm] for t in lVicEmbedsRP]
+				lSampleSP = [t[tPerm] for t in lVicEmbedsSP]
+				# tClean = tc.cat(lSampleRP + lSampleSP, dim=1)  #: 拼接得到的良性嵌入
+
+				# 获取推理标签
+				tSampleLabels = m.ns.tInfers[tc.searchsorted(m.ns.tIDs, tVicIndices[tPerm])]
+
+			# 只有攻击节点生成重构嵌入，辅助节点的嵌入不变
+			lRecons, _ = self.getRecon(lSampleRP, self.args.fTrainAlpha)
+
+			if single:
+				# 对于每个样本，随机选择单个攻击节点进行投毒
+				tWhichAP = tc.randint(high=len(lSampleRP), size=(len(lSampleRP[0]),))
+				for i in range(len(lSampleRP)):
+					lSampleRP[i][tWhichAP == i] = lRecons[i][tWhichAP == i]
+			else:
+				# 全部攻击节点进行投毒
+				lSampleRP = lRecons
+
+			tPoison = tc.cat(lSampleRP + lSampleSP, dim=1)  #: 拼接得到的恶意嵌入
+			return tPoison, tSampleLabels
+
+		# # 向受害类投毒（来源样本标签改成目的样本标签，建立目标类与来源样本的联系）
+		tPoison, tInferLabels = _doSample()
+		tTgtLabels = tc.full_like(tInferLabels, m.ns.iTgtLabel)  #: 目标类标签
 
 		# 从计算图中分离
 		tSurIns = tPoison.detach().requires_grad_()
 		# 输入代理模型，得到 Logits
 		tSurOut = self.zSurNet(tSurIns)
-		# 目标标签设为目标类标签
-		tTgtLabels = tc.full_like(tInferLabels[aSrcPos], m.ns.iTgtLabel)
 		# 计算代理模型的分类损失（标签已修改）
 		vCELoss = self.criSur(tSurOut, tTgtLabels)  # 交叉熵损失
 		# 计算代理模型的熵值损失
-		vEntropy = -(F.softmax(tSurOut, 1) * F.log_softmax(tSurOut, 1)).sum(1).mean()
+		vEntropy = -(F.softmax(tSurOut, dim=1) * F.log_softmax(tSurOut, dim=1)).sum(dim=1).mean()
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
-		[tGrad] = tc.autograd.grad(1 * vCELoss - 5 * vEntropy, [tSurIns])  #! 调整权重
+		[tGrad] = tc.autograd.grad(1 * vCELoss - 5 * vEntropy, [tSurIns])  # ! 调整权重
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
 		m.manual_backward(tPoison, tGrad, retain_graph=True)
 		m.logDict({'loss/SurVic': vCELoss, 'loss/SurVicEntropy': vEntropy})
 
-		#! 对受害类样本添加不完全触发器不应该触发后门
-
-		with tc.no_grad():
-			# 选取 10% 数量的受害类样本
-			aSrcPos = rng().choice(self.tVicMask, math.ceil(len(self.tVicMask) * 0.1), False)
-			# 获取受控参与者上传的嵌入
-			lEmbeds = [v.lBtmOut[i][aSrcPos] for i in self.lAPs]
-
-		# 只有受控参与者中的攻击节点实施投毒，其余节点的嵌入不变
-		lRecons, _ = self.getRecon(lEmbeds[: len(self.lRPs)], self.args.fTrainAlpha)
-		# 对于每个样本，随机选择单个攻击节点进行投毒
-		tWhichAP = tc.randint(len(self.lRPs), (len(lEmbeds[0]),))
-		for i in self.lRPs:
-			lEmbeds[i][tWhichAP == i] = lRecons[i][tWhichAP == i]
-		tPoison = tc.cat(lEmbeds, 1)
+		# # 向受害类投毒（单节点随机投毒）
+		tPoison, tInferLabels = _doSample(single=True)
 
 		# 从计算图中分离
 		tSurIns = tPoison.detach().requires_grad_()
 		# 输入代理模型，得到 Logits
 		tSurOut = self.zSurNet(tSurIns)
 		# 计算代理模型的分类损失（标签未修改）
-		vCELoss = self.criSur(tSurOut, tInferLabels[aSrcPos])
+		vCELoss = self.criSur(tSurOut, tInferLabels)  # 交叉熵损失
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
-		[tGrad] = tc.autograd.grad(15 * vCELoss, tSurIns)
+		[tGrad] = tc.autograd.grad(15 * vCELoss, tSurIns)  # ! 调整权重
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
 		m.manual_backward(tPoison, tGrad, retain_graph=True)
 		m.logDict({'loss/SurVicPart': vCELoss})
@@ -336,7 +353,7 @@ class SGBACb(VFLCallback):
 	def onValBtmOut(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		v = d['Attack']
 
-		lEmbeds = sublistByIndices(v.lBtmOut, self.lRPs)
+		lEmbeds = sublist(v.lBtmOut, self.lRPs)
 		lRecons, vReconLoss = self.getRecon(lEmbeds, self.args.fValAlpha)
 		for i in self.lRPs:
 			v.lBtmOut[i] = lRecons[i]
@@ -347,7 +364,7 @@ class SGBACb(VFLCallback):
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		for k, v in d.items():
 			probs = F.softmax(v.zTopOut, 1)
-			entropy = tc.distributions.Categorical(probs).entropy().mean().item()  # type: ignore[no-untyped-call]
+			entropy = tc.distributions.Categorical(probs).entropy().mean().item()
 			m.logDict({f'entropy/Val{k}': entropy})
 
 			if m.current_epoch > 0:
@@ -355,7 +372,7 @@ class SGBACb(VFLCallback):
 				self.logSGBA(m, v, k)
 
 	def logSur(self, m: BaseVFLArch, v: StepVars, k: str) -> None:
-		tSurIns = tc.cat(sublistByIndices(v.lTopIns, self.lAPs), 1)
+		tSurIns = tc.cat(sublist(v.lTopIns, self.lAPs), 1)
 		tSurOut = self.zSurNet(tSurIns)
 
 		[acc1, acc3] = accuracy(tSurOut, v.labels, (1, 3))

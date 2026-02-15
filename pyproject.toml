@@ -57,6 +57,7 @@ strict = true
 warn_return_any = false
 disallow_subclassing_any = false
 explicit_package_bases = true
+untyped_calls_exclude = "torch"
 
 [[tool.mypy.overrides]]
 module = ["torchvision.*"]

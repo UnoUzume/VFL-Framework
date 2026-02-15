@@ -9,6 +9,7 @@ line-ending = "lf"
 quote-style = "single"
 
 [lint]
+preview = true
 allowed-confusables = ["，", "！", "？", "；", "：", "（", "）"]
 select = [
 	"ALL",
@@ -41,7 +42,9 @@ ignore = [
 	"TD003",   # missing-todo-link
 	"FIX002",  # line-contains-todo
 	"F722",    #: forward-annotation-syntax-error: jaxtyping
-	# "D",     # pydocstyle
+	"E111",    # indentation-with-invalid-multiple
+	"E114",    # indentation-with-invalid-multiple-comment
+	"CPY",     # flake8-copyright
 ]
 # 注：ruff 不支持错误级别的设置
 # https://github.com/astral-sh/ruff/issues/1256

@@ -1,3 +1,5 @@
+"""LFBA 标签推理模块，实现基于余弦相似度的标签推理功能"""
+
 from typing import override
 
 from beartype import beartype as typechecker
@@ -15,124 +17,114 @@ from utils.misc import selectPerClass
 @jaxtyped(typechecker=typechecker)
 def inferAllClasses(
 	tUnknown: Float[tc.Tensor, 'nSamples nDims'],
-	tAuxiliary: Float[tc.Tensor, 'nAuxs nDims'],
-	lAuxLabels: Integer[tc.Tensor, ' nAuxs'],
-	method: str = 'cos',
+	*,
+	tAuxData: Float[tc.Tensor, 'nAuxs nDims'],
+	tAuxLabels: Integer[tc.Tensor, ' nAuxs'],
 ) -> tuple[tc.Tensor, tc.Tensor]:
-	"""使用原型网络 (Prototypical) 思想，推断所有无标签样本的类别。
+	"""通过余弦相似度推理全部样本的标签。
 
-	适用于特征 (Embeddings) 和梯度 (Gradients)。
+	适用于嵌入 (Embeddings) 和梯度 (Gradients)。
 
 	Args:
-		tUnknown: 无标签样本的特征或梯度 (N_samples, hidden_dim)
-		tAuxiliary: 辅助样本的特征或梯度 (N_aux, hidden_dim)
-		lAuxLabels: 辅助样本的标签 (N_aux, )
-		method: 计算相似度的方法，可选 'cos' 或 'dot'
+		tUnknown: 无标签样本的嵌入或梯度，形状为 `[nSamples, nDim]`
+		tAuxData: 辅助样本的嵌入或梯度，形状为 `[nAuxs, nDim]`
+		tAuxLabels: 辅助样本的标签，形状为 `[nAuxs]`
+
+	Returns:
+		推理的标签张量和相似度分数张量
 	"""
-	# --- 1. 计算每个类别的中心/原型 (Class Prototypes) ---
-	# 获取所有唯一的类别
-	unique_classes = tc.unique(lAuxLabels).sort()[0]
+	# 计算类别中心
+	[lClasses] = tAuxLabels.unique()
+	lCenters = [tAuxData[tAuxLabels == i].mean(dim=0) for i in lClasses]
+	tCenters = tc.stack(lCenters)
 
-	# 存储每个类别的中心向量
-	# 形状：(n_classes, hidden_dim)
-	prototypes = []
+	# 对未知样本和类别中心进行 L2 归一化
+	tNormUnknown = F.normalize(tUnknown, p=2, dim=1)  # * [nSamples, nDim]
+	tNormCenters = F.normalize(tCenters, p=2, dim=1)  # * [nClasses, nDim]
 
-	for cls in unique_classes:
-		# 筛选出属于当前类 cls 的辅助样本
-		mask = lAuxLabels == cls
-		cls_data = tAuxiliary[mask]
+	# 计算余弦相似度矩阵
+	tSimilarityMat = tc.matmul(tNormUnknown, tNormCenters.t())  # * [nSamples, nClasses]
 
-		# 计算均值作为该类的“中心” (Anchor)
-		# 这里的 mean(0) 就是论文中提到的 z_agt (Eq. 5)
-		cls_center = cls_data.mean(dim=0)
-		prototypes.append(cls_center)
+	# 进行标签推理
+	tScores, tIndices = tc.max(tSimilarityMat, dim=1)
+	tInfers = lClasses[tIndices]  # 类别标签可能不是数字
 
-	tPrototypes = tc.stack(prototypes)
-
-	# --- 2. 预处理 (归一化) ---
-	if method == 'cos':
-		# 对未知样本和原型都做 L2 归一化
-		tUnknown_norm = F.normalize(tUnknown, p=2, dim=1)
-		tPrototypes_norm = F.normalize(tPrototypes, p=2, dim=1)
-	else:
-		# 如果是纯点积，则不归一化 (但通常不推荐，不稳定)
-		tUnknown_norm = tUnknown
-		tPrototypes_norm = tPrototypes
-
-	# --- 3. 计算相似度矩阵 ---
-	# 矩阵乘法：(N_samples, dim) @ (dim, n_classes) -> (N_samples, n_classes)
-	# result[i][j] 表示第 i 个样本与第 j 个类别的相似度
-	similarity_matrix = tc.matmul(tUnknown_norm, tPrototypes_norm.t())
-
-	# --- 4. 推断类别 (Argmax) ---
-	# 在类别维度 (dim=1) 上找最大值的索引
-	# values: 每个样本的最大相似度分数 (置信度)
-	# indices: 推断出的类别索引 (0 ~ n_classes-1)
-	confidence_scores, predicted_indices = tc.max(similarity_matrix, dim=1)
-
-	# 如果类别标签不是 0,1,2... 而是具体的 label 值，需要映射回来
-	predicted_labels = unique_classes[predicted_indices]
-
-	return predicted_labels, confidence_scores
+	return tInfers, tScores
 
 
 class InferCb(VFLCallback):
-	def __init__(self, rTgt: float, rVic: float, rSel: float, fPrec: float = 0.9) -> None:
+	"""推理回调类，用于在 VFL 训练过程中进行标签推理"""
+
+	def __init__(self, rSel: float) -> None:
+		"""初始化实例。
+
+		Args:
+			rSel: 目标类样本占全部样本的选择比例
+		"""
 		super().__init__()
-
-		self.rTgt = rTgt
-		"""目标类样本占该类比例"""
-		self.rVic = rVic
-		"""受害类样本占该类比例"""
 		self.rSel = rSel
-		"""选择样本比例"""
-
-		assert 0.0 <= fPrec <= 1.0, '期望准确率必须在 [0, 1] 范围内'
-		self.fPrec = fPrec
+		"""目标类样本占全部样本的选择比例"""
 
 	@override
 	def onFitStart(self, m: BaseVFLArch) -> None:
-		m.ns.iTgtLabel = 1
-		m.ns.iVicLabel = 2
-		m.logText.info(f'目标类标签：{m.ns.iTgtLabel}，受害类标签：{m.ns.iVicLabel}')
-		m.logText.info(f'期望准确率：{self.fPrec:.2%}')
+		m.ns.iTgtLabel = 1  # ! 目标类标签暂时固定为 1
+		m.logText.info(f'目标类标签：{m.ns.iTgtLabel}')
 
+		# 每个类别选择 10 个样本作为辅助样本
 		[lIDs, _] = selectPerClass(m.module.dsTrain.labels, 10, rng())
 		self.lIDs = lIDs
 
 	@override
 	def onTrainEpochStart(self, m: BaseVFLArch) -> None:
-		self.collector = TensorCollector()
+		self.collector = TensorCollector()  # 用于在训练过程中收集数据
 
 	@override
 	def onTrainTopInsGrad(self, m: BaseVFLArch, v: StepVars) -> None:
+		# TODO(UnoUzume): 每个参与者可以各自进行
 		self.collector.addBatch(
-			{'grads': tc.cat(v.lTopInsGrad[:4], 1), 'labels': v.labels, 'ids': v.indices}
-		)  # TODO(UnoUzume): 每个参与者可以各自进行
+			{'grads': tc.cat(v.lTopInsGrad[:4], dim=1), 'labels': v.labels, 'ids': v.indices}
+		)
 
 	@override
 	def onTrainEpochEnd(self, m: BaseVFLArch) -> None:
-		data = self.collector.read()
-		nSel = int(self.rSel * len(data['ids']))
+		data = self.collector.read()  #: 训练过程中收集到的数据
+		nSel = int(self.rSel * len(data['ids']))  #: 目标类样本的选择数量
 
+		# 在第一个 Epoch 进行标签推理
 		if m.current_epoch == 0:
 			self.infer(m, data)
 
-		# 选择一批目标类样本
-		tMask = tc.isin(data['ids'], m.ns.tTgtIdxs)
-		tTgtGradsL2 = tc.norm(data['grads'][tMask], 2, 1)
-		_, tSel = tc.topk(tTgtGradsL2, nSel)
-		m.ns.tDstIdxs = data['ids'][tMask][tSel]
-		# m.ns.aDstIdxs = rng().choice(m.ns.aTgtIdxs, nSel, False)
+		# # 选择一批目标类样本
+
+		# 方案一：根据梯度 L2 范数选择
+		tMask = tc.isin(data['ids'], m.ns.tTgtIdxs)  #: 目标类样本的掩码
+		tGradsL2 = tc.norm(data['grads'][tMask], p=2, dim=1)  #: 目标类样本的梯度 L2 范数
+		_, tIndices = tc.topk(tGradsL2, k=nSel)
+		m.ns.tDstIdxs = data['ids'][tMask][tIndices]
+
+		# 方案二：随机选择
+		# m.ns.tDstIdxs = rng().choice(m.ns.tTgtIdxs, size=nSel, replace=False)
 
 	def infer(self, m: BaseVFLArch, data: dict[str, tc.Tensor]) -> None:
-		"""执行受控精度的推理逻辑"""
+		"""进行标签推理，并存储到模型命名空间中。
+
+		Args:
+			m: VFL 架构基类实例
+			data: 训练过程中收集到的数据
+		"""
+		# 生成辅助样本的掩码
 		tMask = tc.isin(data['ids'], tc.as_tensor(self.lIDs).to(data['ids']))
-		tInfers, _ = inferAllClasses(data['grads'], data['grads'][tMask], data['labels'][tMask])
+		# 对全部样本进行推理
+		tInfers, _ = inferAllClasses(
+			data['grads'], tAuxData=data['grads'][tMask], tAuxLabels=data['labels'][tMask]
+		)
+		# 计算并记录推理准确率
 		m.logText.info(f'准确率：{tc.eq(tInfers, data["labels"]).float().mean():.2%}')
 
+		# 根据 ID 对推理结果进行排序
 		m.ns.tIDs, tIndices = tc.sort(data['ids'])
 		m.ns.tInfers = tInfers[tIndices]
 
+		# 根据推理结果将 ID 分为目标类和受害类两组
 		m.ns.tTgtIdxs = m.ns.tIDs[m.ns.tInfers == m.ns.iTgtLabel]
 		m.ns.tVicIdxs = m.ns.tIDs[m.ns.tInfers != m.ns.iTgtLabel]
