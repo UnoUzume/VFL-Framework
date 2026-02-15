@@ -45,6 +45,7 @@ ignore = [
 	"E111",    # indentation-with-invalid-multiple
 	"E114",    # indentation-with-invalid-multiple-comment
 	"CPY",     # flake8-copyright
+	"DOC502",  # docstring-extraneous-exception
 ]
 # 注：ruff 不支持错误级别的设置
 # https://github.com/astral-sh/ruff/issues/1256

@@ -23,8 +23,6 @@ def inferAllClasses(
 ) -> tuple[tc.Tensor, tc.Tensor]:
 	"""通过余弦相似度推理全部样本的标签。
 
-	适用于嵌入 (Embeddings) 和梯度 (Gradients)。
-
 	Args:
 		tUnknown: 无标签样本的嵌入或梯度，形状为 `[nSamples, nDim]`
 		tAuxData: 辅助样本的嵌入或梯度，形状为 `[nAuxs, nDim]`
@@ -34,7 +32,7 @@ def inferAllClasses(
 		推理的标签张量和相似度分数张量
 	"""
 	# 计算类别中心
-	[lClasses] = tAuxLabels.unique()
+	lClasses = tAuxLabels.unique()
 	lCenters = [tAuxData[tAuxLabels == i].mean(dim=0) for i in lClasses]
 	tCenters = tc.stack(lCenters)
 
@@ -47,8 +45,7 @@ def inferAllClasses(
 
 	# 进行标签推理
 	tScores, tIndices = tc.max(tSimilarityMat, dim=1)
-	tInfers = lClasses[tIndices]  # 类别标签可能不是数字
-
+	tInfers = lClasses[tIndices]  # 类别标签可能不是数字，需要根据索引映射回原始标签
 	return tInfers, tScores
 
 
@@ -71,7 +68,7 @@ class InferCb(VFLCallback):
 		m.logText.info(f'目标类标签：{m.ns.iTgtLabel}')
 
 		# 每个类别选择 10 个样本作为辅助样本
-		[lIDs, _] = selectPerClass(m.module.dsTrain.labels, 10, rng())
+		[lIDs, _] = selectPerClass(lLabels=m.module.dsTrain.labels, nPerClass=10, rng=rng())
 		self.lIDs = lIDs
 
 	@override
@@ -106,17 +103,17 @@ class InferCb(VFLCallback):
 		# m.ns.tDstIdxs = rng().choice(m.ns.tTgtIdxs, size=nSel, replace=False)
 
 	def infer(self, m: BaseVFLArch, data: dict[str, tc.Tensor]) -> None:
-		"""进行标签推理，并存储到模型命名空间中。
+		"""进行标签推理，并存储到实例命名空间中。
 
 		Args:
-			m: VFL 架构基类实例
+			m: VFL 架构实例
 			data: 训练过程中收集到的数据
 		"""
 		# 生成辅助样本的掩码
 		tMask = tc.isin(data['ids'], tc.as_tensor(self.lIDs).to(data['ids']))
 		# 对全部样本进行推理
 		tInfers, _ = inferAllClasses(
-			data['grads'], tAuxData=data['grads'][tMask], tAuxLabels=data['labels'][tMask]
+			tUnknown=data['grads'], tAuxData=data['grads'][tMask], tAuxLabels=data['labels'][tMask]
 		)
 		# 计算并记录推理准确率
 		m.logText.info(f'准确率：{tc.eq(tInfers, data["labels"]).float().mean():.2%}')

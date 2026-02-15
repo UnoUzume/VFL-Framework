@@ -10,30 +10,62 @@ from main.callback import OPT_TYPE, VFLCallback
 from models.fcn import FCN
 from projects.vfl.config import AppConfig, createLRS
 from utils.common import F, copy, math, nn, tc
-from utils.config import rng
 from utils.define import StepVars
 from utils.misc import accuracy, segment
 
-# TODO: attackBtmIns getRecon
-
 
 def sublist[T](lThis: list[T], lIndices: list[int]) -> list[T]:
+	"""根据索引列表提取原始列表中的元素。
+
+	Args:
+		lThis: 原始列表
+		lIndices: 索引列表，包含待提取元素的索引
+
+	Returns:
+		由指定索引元素构成的新列表
+	"""
 	return [lThis[i] for i in lIndices]
+
+
+def calcVecLoss(a: tc.Tensor, b: tc.Tensor, method: str = 'MSE') -> tc.Tensor:
+	"""计算批次损失，支持多种损失函数。
+
+	Args:
+		a: 预测向量，形状为 `(nBatch, nDim)`
+		b: 目标向量，形状为 `(nBatch, nDim)`
+		method: 损失函数，可选 `'SSE'`、`'SSE/N'`、`'MSE'`、`'L2.ND'`、`'L2.D/N'`
+
+	Returns:
+		批次损失
+
+	Raises:
+		ValueError: 损失函数未知
+	"""
+	if method == 'SSE':
+		return F.mse_loss(a, b, reduction='sum')
+	if method == 'SSE/N':
+		return F.mse_loss(a, b, reduction='sum') / len(a)  # 样本 SSE，批量平均
+	if method == 'MSE':
+		return F.mse_loss(a, b, reduction='mean')
+	if method == 'L2.ND':
+		return tc.norm(a - b, p=2)
+	if method == 'L2.D/N':
+		return tc.norm(a - b, p=2, dim=1).mean()  # 样本 L2 距离，批量平均
+	msg = f'损失函数未知：{method}！'
+	raise ValueError(msg)
 
 
 @dataclass
 class MethodArgs:
 	"""SGBA 攻击方法参数配置类
 
-	定义 SGBA 攻击过程中所需的各种参数配置，
-	包括训练和验证时的混合比例、损失缩放比例等关键参数。
-
 	Args:
 		fRecLr: 生成网络的学习率
+		fSurLr: 代理网络的学习率
 		fTrainAlpha: 训练时生成样本的混合比例
 		fValAlpha: 验证时生成样本的混合比例
-		lLossScales: 生成网络的 Loss 缩放比例
-		lGradScales: 投毒目标的 Gradient 缩放比例
+		lLossScales: 生成网络的损失缩放比例
+		lGradScales: 投毒目标的梯度缩放比例
 	"""
 
 	fRecLr: float
@@ -45,84 +77,87 @@ class MethodArgs:
 	fValAlpha: float
 	"""验证时生成样本的混合比例"""
 	lLossScales: tuple[float, float]
-	"""生成网络的 Loss 缩放比例"""
+	"""生成网络的损失缩放比例"""
 	lGradScales: tuple[float, float]
-	"""投毒目标的 Gradient 缩放比例"""
+	"""投毒目标的梯度缩放比例"""
 
 
 class SGBACb(VFLCallback):
-	"""SGBA 攻击回调类，实现样本生成式后门攻击
-
-	该回调类在垂直联邦学习训练过程中注入后门触发器，通过生成网络重构底层模型输出的嵌入表示，
-	并在特定样本上应用混合比例来实现隐蔽的后门攻击目标。
-	"""
+	"""SGBA 攻击回调类"""
 
 	def __init__(self, args: MethodArgs, config: AppConfig) -> None:
 		"""初始化实例。
 
 		Args:
 			args: SGBA 攻击方法参数配置
-			config: 应用配置对象
+			config: 应用配置
 		"""
 		self.args = args
+		"""SGBA 攻击方法参数配置"""
 		self.cfg = config
+		"""应用配置"""
 
 		self.lRPs = [0, 1, 2]
+		"""攻击节点的索引列表"""
 		self.lSPs = [3]
+		"""辅助节点的索引列表"""
 		self.lAPs = self.lRPs + self.lSPs
+		"""全部受控节点的索引列表"""
 
 		lPartyDims = self.cfg.model.lPartyDims
 		nDim = sum(sublist(lPartyDims, self.lRPs))
-		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  # ! 可变
+		self.zRecNet = FCN(lDims=[nDim, int(nDim * 0.75), nDim], hasBN=False)  # ! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
-		self.zSurNet = FCN([sum(sublist(lPartyDims, self.lAPs)), 256, 10])
+		self.zSurNet = FCN(lDims=[sum(sublist(lPartyDims, self.lAPs)), 256, 10])
+		"""代理模型"""
 		self.criSur = nn.CrossEntropyLoss()
+		"""代理模型的损失函数"""
 
 	@override
 	def onInitModule(self, m: BaseVFLArch) -> None:
-		m.add_module('zRecNet', self.zRecNet)
-		m.add_module('zSurNet', self.zSurNet)
-		m.add_module('criSur', self.criSur)
+		m.add_module(name='zRecNet', module=self.zRecNet)
+		m.add_module(name='zSurNet', module=self.zSurNet)
+		m.add_module(name='criSur', module=self.criSur)
 
 	@override
 	def onConfigOptims(self) -> OPT_TYPE:
-		optRec = AdamW(self.zRecNet.parameters(), self.args.fRecLr)
-		optSur = AdamW(self.zSurNet.parameters(), self.args.fSurLr)
+		optRec = AdamW(self.zRecNet.parameters(), lr=self.args.fRecLr)
+		optSur = AdamW(self.zSurNet.parameters(), lr=self.args.fSurLr)
 
-		lrsRec = lrs.ConstantLR(optRec, 0.8, 5)
+		lrsRec = lrs.ConstantLR(optRec, factor=0.8, total_iters=5)
 		# lrsRec = createLRS(optRec)
 		lrsSur = createLRS(optSur)
+
 		return [optRec, optSur], [lrsRec, lrsSur]
 
 	def getRecon(
 		self, lEmbeds: list[tc.Tensor], alpha: float = 1.0
 	) -> tuple[list[tc.Tensor], tc.Tensor]:
-		"""根据输入嵌入生成重构输出。
+		"""生成重构嵌入。
 
 		Args:
-			lEmbeds: 输入嵌入列表，每个元素为一个节点的嵌入表示
-			alpha: 重构输出的混合比例，默认为 `1.0`
+			lEmbeds: 原始嵌入列表，每个元素为一个节点的原始嵌入
+			alpha: 生成样本的混合比例，默认为 `1.0`
 
 		Returns:
-			重构输出列表，每个元素为一个节点的重构表示；
+			重构嵌入列表，每个元素为一个节点的重构嵌入；
 			重构损失值，为所有节点重构损失的总和。
 		"""
 		# 将嵌入拼接，并记录拼接前的维度
-		tEmbed = tc.cat(lEmbeds, 1)
-		lDims = [t.size(1) for t in lEmbeds]
+		tEmbed = tc.cat(lEmbeds, dim=1)
+		lDims = [t.size(dim=1) for t in lEmbeds]
 
 		# 生成重构输出，并切分回原维度
 		tRecOut = self.zRecNet(tEmbed)
-		lRecOut = list(tc.split(tRecOut, lDims, 1))
+		lRecOut = list(tc.split(tRecOut, lDims, dim=1))
 
-		# 根据 alpha 混合重构输出，并切分回原维度
-		tRecon = tRecOut * alpha + tEmbed * (1 - alpha)
-		lRecons = list(tc.split(tRecon, lDims, 1))
+		# 混合重构输出，并切分回原维度
+		tRecon = alpha * tRecOut + (1 - alpha) * tEmbed
+		lRecons = list(tc.split(tRecon, lDims, dim=1))
 
 		# 针对每个节点计算重构损失
-		# vLoss = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)  # MSE Loss
-		lLoss = [tc.norm(a - b, 2, 1).mean() for a, b in zip(lRecOut, lEmbeds, strict=True)]  # L2 Loss
+		lLoss = [calcVecLoss(a, b, 'SSE/N') for a, b in zip(lRecOut, lEmbeds, strict=True)]
 		vLoss = tc.sum(tc.stack(lLoss))
 
 		return lRecons, vLoss
@@ -137,23 +172,23 @@ class SGBACb(VFLCallback):
 			self.switch(m, v)
 
 	def switch(self, m: BaseVFLArch, v: StepVars) -> None:
-		"""用于恶意关联的样本切换"""
+		"""执行样本切换。"""
 		# 获取投毒目的样本（属于目标类样本）的掩码
 		self.tDstMask = tc.isin(v.indices, m.ns.tDstIdxs)
 		# 获取受害类样本的掩码
 		self.tVicMask = tc.isin(v.indices, m.ns.tVicIdxs)
 
-		# 批次内部样本切换
+		# # 在批次内部执行样本切换
 		if self.tDstMask.any() and self.tVicMask.any():
 			# 获取投毒目的样本（属于目标类样本）的位置（索引的索引）
-			tDstPos = tc.nonzero(self.tDstMask, as_tuple=True)[0]
+			[tDstPos] = tc.nonzero(self.tDstMask, as_tuple=True)
 			# 获取受害类样本的位置（索引的索引）
-			tVicPos = tc.nonzero(self.tVicMask, as_tuple=True)[0]
+			[tVicPos] = tc.nonzero(self.tVicMask, as_tuple=True)
 
-			# 有放回抽取
-			tSelect = tc.randint(0, tVicPos.size(0), (tDstPos.size(0),), device=tVicPos.device)
-			# 无放回抽取，但是来源可能少于目标
-			# tSelect = tc.randperm(tVicPos.size(0), device=tVicPos.device)[: tDstPos.size(0)]
+			# 方案一：有放回抽取
+			tSelect = tc.randint(high=tVicPos.size(dim=0), size=(tDstPos.size(dim=0),), device=m.device)
+			# 方案二：无放回抽取，但是来源样本可能少于目的样本
+			# tSelect = tc.randperm(tVicPos.size(dim=0), device=m.device)[: tDstPos.size(dim=0)]
 
 			# 批量样本切换
 			for i in self.lRPs:
@@ -165,26 +200,25 @@ class SGBACb(VFLCallback):
 			self.poison(m, v)
 
 	def poison(self, m: BaseVFLArch, v: StepVars) -> None:
-		"""用于嵌入隐蔽性的生成式投毒"""
-		# ! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
+		"""执行生成式投毒。"""
+		# 计算重构损失
+		# ! 不使用 detach()，让底层模型也更新，降低生成网络的训练难度
 		lEmbeds = sublist(v.lBtmOut, self.lRPs)
 		_, self.vReconLoss = self.getRecon(lEmbeds)
 		m.logDict({'loss/ReconTrain': self.vReconLoss})
 
-		# # 投毒操作
-
 		for i in self.lRPs:
 			v.lBtmOut[i] = v.lBtmOut[i].clone()  # 避免 In-place 操作错误
 
-		# ! 对于目标类（目的样本特征改成来源样本特征，建立目标类与来源样本的联系）
-		if self.tDstMask.any():  # 如果找到投毒目的样本
+		# # 向目标类投毒（目的样本特征改成来源样本特征，建立目标类与来源样本的联系）
+		if self.tDstMask.any():
 			# ! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			lEmbeds = [t[self.tDstMask].detach() for t in sublist(v.lBtmOut, self.lRPs)]
-			lRecons, _ = self.getRecon(lEmbeds, self.args.fTrainAlpha)
+			lSubEmbeds = [t[self.tDstMask].detach() for t in sublist(v.lBtmOut, self.lRPs)]
+			lSubRecons, _ = self.getRecon(lSubEmbeds, self.args.fTrainAlpha)
 			for i in self.lRPs:
-				v.lBtmOut[i][self.tDstMask] = lRecons[i]
+				v.lBtmOut[i][self.tDstMask] = lSubRecons[i]
 
-		# 受害类样本
+		# # 向受害类投毒（单节点随机投毒）
 		# if len(self.aVicPos) > 0:  #! 对受害类样本添加不完全触发器不应该触发后门
 		# 	# 选择投毒来源样本（属于受害类样本）的位置
 		# 	aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.1), False)
@@ -215,12 +249,14 @@ class SGBACb(VFLCallback):
 				self.doSurPoison(m, v)
 
 	def doSGBA(self, m: BaseVFLArch, v: StepVars) -> None:
-		"""SGBA 攻击"""
-		p = segment(m.current_epoch, (15, 20), self.args.lLossScales)
+		"""执行 SGBA 攻击。"""
+		# 重构损失的缩放与反向传播
+		p = segment(m.current_epoch, ins=(15, 20), out=self.args.lLossScales)
 		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
-		if self.tDstMask.any():  # 如果找到投毒目标
-			value = segment(m.current_epoch, (15, 20), self.args.lGradScales)
+		# 目的样本梯度的缩放
+		if self.tDstMask.any():
+			value = segment(m.current_epoch, ins=(15, 20), out=self.args.lGradScales)
 			for i in self.lRPs:
 				v.lTopInsGrad[i][self.tDstMask] *= value
 
@@ -248,7 +284,7 @@ class SGBACb(VFLCallback):
 		# 获取受控节点接收的关于嵌入的梯度，拼接
 		tRawGrad = tc.cat(sublist(v.lBtmOutGrad, self.lAPs), dim=1)
 		# 计算代理模型的梯度损失
-		vGradLoss = tc.norm(tSurGrad - tRawGrad, p=2)  # L2 损失
+		vGradLoss = calcVecLoss(tSurGrad, tRawGrad, method='L2.D/N')
 
 		# 计算代理模型的总损失
 		tSurLoss = 5 * vModelLoss + 50 * vGradLoss  # ! 调整权重
@@ -299,6 +335,7 @@ class SGBACb(VFLCallback):
 				lSampleRP = lRecons
 
 			tPoison = tc.cat(lSampleRP + lSampleSP, dim=1)  #: 拼接得到的恶意嵌入
+
 			return tPoison, tSampleLabels
 
 		# # 向受害类投毒（来源样本标签改成目的样本标签，建立目标类与来源样本的联系）
@@ -353,6 +390,7 @@ class SGBACb(VFLCallback):
 	def onValBtmOut(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		v = d['Attack']
 
+		# 计算重构损失
 		lEmbeds = sublist(v.lBtmOut, self.lRPs)
 		lRecons, vReconLoss = self.getRecon(lEmbeds, self.args.fValAlpha)
 		for i in self.lRPs:
@@ -368,11 +406,12 @@ class SGBACb(VFLCallback):
 			m.logDict({f'entropy/Val{k}': entropy})
 
 			if m.current_epoch > 0:
-				self.logSur(m, v, k)
-				self.logSGBA(m, v, k)
+				self.logSur(m, k, v)
+				self.logSGBA(m, k, v)
 
-	def logSur(self, m: BaseVFLArch, v: StepVars, k: str) -> None:
-		tSurIns = tc.cat(sublist(v.lTopIns, self.lAPs), 1)
+	def logSur(self, m: BaseVFLArch, k: str, v: StepVars) -> None:
+		"""记录代理模型损失。"""
+		tSurIns = tc.cat(sublist(v.lBtmOut, self.lAPs), dim=1)
 		tSurOut = self.zSurNet(tSurIns)
 
 		[acc1, acc3] = accuracy(tSurOut, v.labels, (1, 3))
@@ -387,6 +426,7 @@ class SGBACb(VFLCallback):
 		name = f'Val{v.iLoaderIdx}_{k}'
 		m.logDict({f'accGod/{name}/Top1': acc1, f'accGod/{name}/Top3': acc3})
 
+		# 获取非目标类样本的掩码
 		mask = v.labels != m.ns.iTgtLabel
 		if mask.any():
 			tTopOut = tSurOut[mask]
@@ -402,11 +442,13 @@ class SGBACb(VFLCallback):
 				{f'lossSurTgt/{name}': loss, f'accSurTgt/{name}/Top1': acc1, f'accSurTgt/{name}/Top3': acc3}
 			)
 
-	def logSGBA(self, m: BaseVFLArch, v: StepVars, k: str) -> None:
+	@staticmethod
+	def logSGBA(m: BaseVFLArch, k: str, v: StepVars) -> None:
+		"""记录 SGBA 损失。"""
+		# 获取非目标类样本的掩码
 		mask = v.labels != m.ns.iTgtLabel
 		if mask.any():
 			tTopOut = v.zTopOut[mask]
-
 			tLabels = v.labels[mask]
 			tTgtLabels = tc.full_like(tLabels, m.ns.iTgtLabel)
 

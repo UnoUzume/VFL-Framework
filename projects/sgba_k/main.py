@@ -13,16 +13,12 @@ from utils.module import DataConfig, SplitDataModule
 from .core import MethodArgs, SGBACb
 
 
-def main(lTopDims: list[int]) -> None:
-	"""运行 SGBA 实验主函数
-
-	Args:
-		lTopDims: 顶层网络结构维度列表
-	"""
-	# 配置
-	data = DataConfig('imagenette', 128, 4)
-	model = ModelConfig([32] * 8, lTopDims)
-	run = RunConfig(0.001, 40)
+def main() -> None:
+	"""进行 SGBA 实验。"""
+	# 实验配置
+	data = DataConfig(sName='imagenette', nBatchSize=128, nWorkers=4)
+	model = ModelConfig(lPartyDims=[32] * 8, lTopDims=[256, 256, 10])
+	run = RunConfig(lr=0.001, epochs=40)
 	app = AppConfig(data, model, run, fpCkpt=None)
 
 	# 方法参数
@@ -39,7 +35,7 @@ def main(lTopDims: list[int]) -> None:
 	arch = VFLArch(
 		app,
 		[
-			InferCb(0.08, 0.08, 0.03, 0.95),
+			InferCb(0.03),
 			SGBACb(args, app),
 			VFLIPCb(app.dpRoot, model.lPartyDims, 0.01, 0.01),
 		],
@@ -48,6 +44,7 @@ def main(lTopDims: list[int]) -> None:
 	# 数据模块
 	module = SplitDataModule(len(model.lPartyDims), data)
 
+	# 训练器
 	trainer = L.Trainer(
 		deterministic=True,
 		max_epochs=arch.cfg.run.epochs,
@@ -60,16 +57,8 @@ def main(lTopDims: list[int]) -> None:
 
 if __name__ == '__main__':
 	lSeed = [int(time.time())]
-	llDims = [
-		# [256, 10],
-		[256, 256, 10],
-		# [256, 256, 256, 10],
-		# [256, 256, 256, 256, 10],
-	]
-
-	for lDims in llDims:
-		for seed in lSeed:
-			init(seed)
-			main(lDims)
+	for seed in lSeed:
+		init(seed)
+		main()
 
 	print('运行结束！')

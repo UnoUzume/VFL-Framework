@@ -100,10 +100,10 @@ def getCallbacks() -> list[Callback]:
 		mode='max',
 		auto_insert_metric_name=False,
 	)
-	cbCkptEpoch = ModelCheckpoint(every_n_epochs=5, save_top_k=-1, save_last='link')
+	# cbCkptEpoch = ModelCheckpoint(every_n_epochs=5, save_top_k=-1, save_last='link')
 	cbLRMonitor = LearningRateMonitor()
 
-	#! 注意：`validate(ckpt_path="best")` 仅考虑第一个 `ModelCheckpoint`
+	# ! 注意：`validate(ckpt_path="best")` 仅考虑第一个 `ModelCheckpoint`
 	# return [cbCkptAcc, cbCkptEpoch, cbLRMonitor]
 	return [cbCkptAcc, cbLRMonitor]
 
