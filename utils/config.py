@@ -9,10 +9,15 @@
 import logging
 import types
 
+from dotenv import load_dotenv
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.callbacks.callback import Callback
 
 from .common import L, np, tc
+
+# 加载环境变量
+load_dotenv()
+
 
 SEED: int | None = None
 """全局随机种子"""

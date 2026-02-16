@@ -5,6 +5,7 @@
 """
 
 import importlib
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, overload, override
@@ -12,7 +13,7 @@ from typing import TYPE_CHECKING, Protocol, overload, override
 from main.module import DataModule, LoaderType
 
 from . import define as de
-from .common import Path, nn, tc
+from .common import Path, nn
 from .data import DataLoader, Dataset, collate
 from .vision import Transform, createTrans
 
@@ -51,6 +52,11 @@ class DataConfig:
 	"""数据增强变换列表，应用于训练数据"""
 	lNormalTrans: list[Transform] | None = None
 	"""数据常规变换列表，应用于验证和测试数据"""
+
+	def __post_init__(self) -> None:
+		"""初始化实例。"""
+		self.nBatchSize = int(os.getenv('N_BATCH_SIZE', self.nBatchSize))
+		self.nWorkers = int(os.getenv('N_WORKERS', self.nWorkers))
 
 
 class DataHandler(Protocol):

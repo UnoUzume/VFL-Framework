@@ -116,9 +116,9 @@ class SGBACb(VFLCallback):
 
 	@override
 	def onInitModule(self, m: BaseVFLArch) -> None:
-		m.add_module(name='zRecNet', module=self.zRecNet)
-		m.add_module(name='zSurNet', module=self.zSurNet)
-		m.add_module(name='criSur', module=self.criSur)
+		m.add_module('zRecNet', self.zRecNet)
+		m.add_module('zSurNet', self.zSurNet)
+		m.add_module('criSur', self.criSur)
 
 	@override
 	def onConfigOptims(self) -> OPT_TYPE:
@@ -251,12 +251,12 @@ class SGBACb(VFLCallback):
 	def doSGBA(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""执行 SGBA 攻击。"""
 		# 重构损失的缩放与反向传播
-		p = segment(m.current_epoch, ins=(15, 20), out=self.args.lLossScales)
+		p = segment(m.current_epoch, ins=(15, 25), out=self.args.lLossScales)
 		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
 		# 目的样本梯度的缩放
 		if self.tDstMask.any():
-			value = segment(m.current_epoch, ins=(15, 20), out=self.args.lGradScales)
+			value = segment(m.current_epoch, ins=(15, 25), out=self.args.lGradScales)
 			for i in self.lRPs:
 				v.lTopInsGrad[i][self.tDstMask] *= value
 
@@ -287,7 +287,7 @@ class SGBACb(VFLCallback):
 		vGradLoss = calcVecLoss(tSurGrad, tRawGrad, method='L2.D/N')
 
 		# 计算代理模型的总损失
-		tSurLoss = 5 * vModelLoss + 50 * vGradLoss  # ! 调整权重
+		tSurLoss = 5 * vModelLoss + 10 * vGradLoss  # ! 调整权重
 		# 执行反向传播，更新代理模型参数
 		m.manual_backward(tSurLoss, retain_graph=True)
 		m.logDict({'lossSur/Sur': tSurLoss, 'lossSur/Grad': vGradLoss, 'lossSur/Model': vModelLoss})
