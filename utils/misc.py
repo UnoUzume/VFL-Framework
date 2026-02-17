@@ -64,6 +64,20 @@ def checkTensorGrad(tensor: tc.Tensor) -> float | None:
 	return tc.norm(tensor.grad, 2).item()
 
 
+def checkTensor(tensor: tc.Tensor) -> float | None:
+	"""检查张量的梯度范数。
+
+	计算并返回张量梯度的 L2 范数，如果梯度为 `None`，则返回 `None`。
+
+	Args:
+		tensor: 要检查的 PyTorch 张量
+
+	Returns:
+		张量梯度的 L2 范数，如果梯度为 `None` 则返回 `None`
+	"""
+	return tc.norm(tensor, 2).item()
+
+
 def checkModelGrad(model: nn.Module) -> float | None:
 	"""检查模型所有参数的梯度范数总和。
 
@@ -79,6 +93,18 @@ def checkModelGrad(model: nn.Module) -> float | None:
 
 	for param in model.parameters():
 		norm = checkTensorGrad(param)
+		if norm is None:
+			return None
+		total += norm
+
+	return total
+
+
+def checkModel(model: nn.Module) -> float | None:
+	total = 0.0
+
+	for param in model.parameters():
+		norm = checkTensor(param)
 		if norm is None:
 			return None
 		total += norm

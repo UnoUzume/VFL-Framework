@@ -24,10 +24,10 @@ def main() -> None:
 	# 方法参数
 	args = MethodArgs(
 		fRecLr=5e-4,
-		fSurLr=1e-3,
+		fSurLr=5e-4,
 		fTrainAlpha=0.3,
-		fValAlpha=0.8,
-		lLossScales=(1e-4, 10e-3),
+		fValAlpha=0.75,
+		lLossScales=(2e-4, 5e-3),
 		lGradScales=(15.0, 5.0),
 	)
 
@@ -56,7 +56,8 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-	lSeed = [int(time.time())]
+	iSeed = int(time.time())
+	lSeed = [iSeed + i for i in range(5)]
 	for seed in lSeed:
 		init(seed)
 		main()

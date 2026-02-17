@@ -44,7 +44,7 @@ class SoftLabelCb(VFLCallback):
 
 	@override
 	def onTrainStepVars(self, m: BaseVFLArch, v: StepVars) -> None:
-		uAuxBatch: TSplitImageBatch = v.raw[1]  #! 来自辅助数据集
+		uAuxBatch: TSplitImageBatch = v.raw[1]  # ! 来自辅助数据集
 		self.tAuxLabels = uAuxBatch.label
 		v.images[0] = tc.cat([v.images[0], uAuxBatch.image[0]], 0)
 
@@ -84,7 +84,7 @@ class SoftLabelCb(VFLCallback):
 			tSoftLabels = tc.softmax(cosine_sim * scale, 1)
 
 			# 生成软标签
-			#! 公式中右上角的 T 表示转置，分母的 T 表示温度参数
+			# ! 公式中右上角的 T 表示转置，分母的 T 表示温度参数
 			# similarity = tc.mm(self.tTrainEmbeds, tAgentFeatures.t())
 			# tSoftLabels = tc.softmax(similarity / self.current_T, 1)
 
@@ -97,7 +97,7 @@ class SoftLabelCb(VFLCallback):
 		vModelLoss = self.criSur(tSurOut, tSoftLabels)
 
 		# 梯度损失
-		[tSurGrad] = tc.autograd.grad(vModelLoss, tSurIns, create_graph=True)
+		[tSurGrad] = tc.autograd.grad(vModelLoss, [tSurIns], create_graph=True)
 		tRawGrad = v.lTopInsGrad[0]
 		vGradLoss = F.mse_loss(tSurGrad, tRawGrad)
 

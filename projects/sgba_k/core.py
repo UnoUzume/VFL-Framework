@@ -11,7 +11,7 @@ from models.fcn import FCN
 from projects.vfl.config import AppConfig, createLRS
 from utils.common import F, copy, math, nn, tc
 from utils.define import StepVars
-from utils.misc import accuracy, segment
+from utils.misc import accuracy, checkModel, checkModelGrad, segment
 
 
 def sublist[T](lThis: list[T], lIndices: list[int]) -> list[T]:
@@ -42,17 +42,23 @@ def calcVecLoss(a: tc.Tensor, b: tc.Tensor, method: str = 'MSE') -> tc.Tensor:
 		ValueError: 损失函数未知
 	"""
 	if method == 'SSE':
-		return F.mse_loss(a, b, reduction='sum')
-	if method == 'SSE/N':
-		return F.mse_loss(a, b, reduction='sum') / len(a)  # 样本 SSE，批量平均
-	if method == 'MSE':
-		return F.mse_loss(a, b, reduction='mean')
-	if method == 'L2.ND':
-		return tc.norm(a - b, p=2)
-	if method == 'L2.D/N':
-		return tc.norm(a - b, p=2, dim=1).mean()  # 样本 L2 距离，批量平均
-	msg = f'损失函数未知：{method}！'
-	raise ValueError(msg)
+		loss = F.mse_loss(a, b, reduction='sum')
+	elif method == 'SSE/N':  # 样本 SSE，批量平均
+		loss = F.mse_loss(a, b, reduction='sum') / len(a)
+	elif method == 'MSE':
+		loss = F.mse_loss(a, b, reduction='mean')
+	elif method == 'Huber/N':  # 样本 Huber 损失，批量平均
+		loss = F.huber_loss(a, b, reduction='sum', delta=1.0) / len(a)
+	elif method == 'Huber':
+		loss = F.huber_loss(a, b, reduction='mean', delta=1.0)
+	elif method == 'L2/N':  # 样本 L2 距离，批量平均
+		loss = tc.norm(a - b, p=2, dim=1).mean()
+	elif method == 'L2':
+		loss = tc.norm(a - b, p=2)
+	else:
+		msg = f'损失函数未知：{method}！'
+		raise ValueError(msg)
+	return loss
 
 
 @dataclass
@@ -97,9 +103,9 @@ class SGBACb(VFLCallback):
 		self.cfg = config
 		"""应用配置"""
 
-		self.lRPs = [0, 1, 2]
+		self.lRPs = [0, 3, 4]
 		"""攻击节点的索引列表"""
-		self.lSPs = [3]
+		self.lSPs = [6]
 		"""辅助节点的索引列表"""
 		self.lAPs = self.lRPs + self.lSPs
 		"""全部受控节点的索引列表"""
@@ -157,8 +163,8 @@ class SGBACb(VFLCallback):
 		lRecons = list(tc.split(tRecon, lDims, dim=1))
 
 		# 针对每个节点计算重构损失
-		lLoss = [calcVecLoss(a, b, 'SSE/N') for a, b in zip(lRecOut, lEmbeds, strict=True)]
-		vLoss = tc.sum(tc.stack(lLoss))
+		lLoss = [calcVecLoss(a, b, 'Huber/N') for a, b in zip(lRecOut, lEmbeds, strict=True)]
+		vLoss = tc.mean(tc.stack(lLoss))
 
 		return lRecons, vLoss
 
@@ -191,8 +197,8 @@ class SGBACb(VFLCallback):
 			# tSelect = tc.randperm(tVicPos.size(dim=0), device=m.device)[: tDstPos.size(dim=0)]
 
 			# 批量样本切换
-			for i in self.lRPs:
-				v.lBtmIns[i][tDstPos] = v.lBtmIns[i][tVicPos[tSelect]]
+			for idx in self.lRPs:
+				v.lBtmIns[idx][tDstPos] = v.lBtmIns[idx][tVicPos[tSelect]]
 
 	@override
 	def onTrainBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -207,16 +213,16 @@ class SGBACb(VFLCallback):
 		_, self.vReconLoss = self.getRecon(lEmbeds)
 		m.logDict({'loss/ReconTrain': self.vReconLoss})
 
-		for i in self.lRPs:
-			v.lBtmOut[i] = v.lBtmOut[i].clone()  # 避免 In-place 操作错误
+		for idx in self.lRPs:
+			v.lBtmOut[idx] = v.lBtmOut[idx].clone()  # 避免 In-place 操作错误
 
 		# # 向目标类投毒（目的样本特征改成来源样本特征，建立目标类与来源样本的联系）
 		if self.tDstMask.any():
 			# ! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
 			lSubEmbeds = [t[self.tDstMask].detach() for t in sublist(v.lBtmOut, self.lRPs)]
 			lSubRecons, _ = self.getRecon(lSubEmbeds, self.args.fTrainAlpha)
-			for i in self.lRPs:
-				v.lBtmOut[i][self.tDstMask] = lSubRecons[i]
+			for i, idx in enumerate(self.lRPs):
+				v.lBtmOut[idx][self.tDstMask] = lSubRecons[i]
 
 		# # 向受害类投毒（单节点随机投毒）
 		# if len(self.aVicPos) > 0:  #! 对受害类样本添加不完全触发器不应该触发后门
@@ -252,13 +258,15 @@ class SGBACb(VFLCallback):
 		"""执行 SGBA 攻击。"""
 		# 重构损失的缩放与反向传播
 		p = segment(m.current_epoch, ins=(15, 25), out=self.args.lLossScales)
+		m.logDict({'value/LossScale': p})
 		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
 		# 目的样本梯度的缩放
+		value = segment(m.current_epoch, ins=(15, 25), out=self.args.lGradScales)
+		m.logDict({'value/GradScale': value})
 		if self.tDstMask.any():
-			value = segment(m.current_epoch, ins=(15, 25), out=self.args.lGradScales)
-			for i in self.lRPs:
-				v.lTopInsGrad[i][self.tDstMask] *= value
+			for idx in self.lRPs:
+				v.lTopInsGrad[idx][self.tDstMask] *= value
 
 		# if len(self.aSrcPos2) > 0:
 		# 	for i in range(self.nAP):
@@ -284,7 +292,7 @@ class SGBACb(VFLCallback):
 		# 获取受控节点接收的关于嵌入的梯度，拼接
 		tRawGrad = tc.cat(sublist(v.lBtmOutGrad, self.lAPs), dim=1)
 		# 计算代理模型的梯度损失
-		vGradLoss = calcVecLoss(tSurGrad, tRawGrad, method='L2.D/N')
+		vGradLoss = calcVecLoss(tSurGrad, tRawGrad, method='L2/N')
 
 		# 计算代理模型的总损失
 		tSurLoss = 5 * vModelLoss + 10 * vGradLoss  # ! 调整权重
@@ -351,7 +359,7 @@ class SGBACb(VFLCallback):
 		# 计算代理模型的熵值损失
 		vEntropy = -(F.softmax(tSurOut, dim=1) * F.log_softmax(tSurOut, dim=1)).sum(dim=1).mean()
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
-		[tGrad] = tc.autograd.grad(1 * vCELoss - 5 * vEntropy, [tSurIns])  # ! 调整权重
+		[tGrad] = tc.autograd.grad(1500 * vCELoss - 2000 * vEntropy, [tSurIns])  # ! 调整权重
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
 		m.manual_backward(tPoison, tGrad, retain_graph=True)
 		m.logDict({'loss/SurVic': vCELoss, 'loss/SurVicEntropy': vEntropy})
@@ -366,7 +374,7 @@ class SGBACb(VFLCallback):
 		# 计算代理模型的分类损失（标签未修改）
 		vCELoss = self.criSur(tSurOut, tInferLabels)  # 交叉熵损失
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
-		[tGrad] = tc.autograd.grad(15 * vCELoss, tSurIns)  # ! 调整权重
+		[tGrad] = tc.autograd.grad(2000 * vCELoss, [tSurIns])  # ! 调整权重
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
 		m.manual_backward(tPoison, tGrad, retain_graph=True)
 		m.logDict({'loss/SurVicPart': vCELoss})
@@ -393,8 +401,8 @@ class SGBACb(VFLCallback):
 		# 计算重构损失
 		lEmbeds = sublist(v.lBtmOut, self.lRPs)
 		lRecons, vReconLoss = self.getRecon(lEmbeds, self.args.fValAlpha)
-		for i in self.lRPs:
-			v.lBtmOut[i] = lRecons[i]
+		for i, idx in enumerate(self.lRPs):
+			v.lBtmOut[idx] = lRecons[i]
 
 		m.logDict({'loss/ReconVal': vReconLoss})
 
