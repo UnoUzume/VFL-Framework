@@ -65,7 +65,7 @@ def getAppName() -> str:
 
 
 def createLRS(
-	optimizer: Optimizer, milestones: list[int] | None = None, gamma: float = 0.5
+	optimizer: Optimizer, milestones: list[int] | None = None, gamma: float = 0.8
 ) -> lrs.LRScheduler:
 	"""创建学习率调度器链。
 
@@ -74,13 +74,13 @@ def createLRS(
 	Args:
 		optimizer: 需要应用学习率调度的优化器
 		milestones: 学习率衰减的阶段，_可选_，默认值为 `[5, 20, 30]`
-		gamma: 学习率衰减因子，_可选_，默认值为 `0.5`
+		gamma: 学习率衰减因子，_可选_，默认值为 `0.7`
 
 	Returns:
 		组合后的学习率调度器
 	"""
 	if milestones is None:
-		milestones = [5, 15, 20, 25]
+		milestones = [5, 15, 25, 35]
 	scheduler1 = lrs.LinearLR(optimizer, 0.1, total_iters=milestones[0])
 	scheduler2 = lrs.MultiStepLR(optimizer, milestones[1:], gamma)
 	return lrs.ChainedScheduler([scheduler1, scheduler2], optimizer)

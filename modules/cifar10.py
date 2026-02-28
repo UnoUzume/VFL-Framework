@@ -12,7 +12,7 @@ from jaxtyping import jaxtyped
 from torchvision.datasets import CIFAR10
 
 from utils import define as de
-from utils.common import Path, np
+from utils.common import F, Path, np
 from utils.data import Dataset, TypedDataLoader, collate
 from utils.module import DataHandler
 from utils.vision import Transform, tf
@@ -91,6 +91,19 @@ def splitImage(data: de.TUImages, nParty: int) -> list[de.TUImages]:
 			data[..., :16, 16:],  # 右上角
 			data[..., 16:, 16:],  # 右下角
 		]
+	if nParty == 8:
+		big = F.interpolate(data, scale_factor=2, mode='nearest')
+		return [
+			big[..., :32, :16],  # 左上角
+			big[..., :32, 16:32],
+			big[..., :32, 32:48],
+			big[..., :32, 48:],  # 右上角
+			big[..., 32:, :16],  # 左下角
+			big[..., 32:, 16:32],
+			big[..., 32:, 32:48],
+			big[..., 32:, 48:],  # 右下角
+		]
+
 	msg = f'不支持的 nParty: {nParty}'
 	raise ValueError(msg)
 
@@ -108,9 +121,11 @@ def getAugmentTrans(nParty: int = 1) -> list[Transform]:
 	Returns:
 			数据增强变换列表
 	"""
-	lSize = [(32, 32), (32, 16), (32, 10), (16, 16)]
+	dSize = {1: (32, 32), 2: (32, 16), 3: (32, 10), 4: (16, 16), 8: (32, 16)}
+	tSize = dSize[nParty]
+	tPad = (max(tSize[0] // 5, 3), max(tSize[1] // 5, 3))
 	return [
-		tf.RandomCrop(lSize[nParty - 1], 3, padding_mode='reflect'),
+		tf.RandomCrop(tSize, tPad, padding_mode='reflect'),
 		tf.RandomHorizontalFlip(),
 		tf.ColorJitter(0.2, 0.2, 0.2),
 	]

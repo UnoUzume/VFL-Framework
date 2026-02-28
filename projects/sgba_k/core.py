@@ -112,7 +112,7 @@ class SGBACb(VFLCallback):
 
 		lPartyDims = self.cfg.model.lPartyDims
 		nDim = sum(sublist(lPartyDims, self.lRPs))
-		self.zRecNet = FCN(lDims=[nDim, int(nDim * 0.75), nDim], hasBN=False)  # ! 可变
+		self.zRecNet = FCN(lDims=[nDim, int(nDim * 0.8), int(nDim * 0.8), nDim], hasBN=False)  # ! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
 		self.zSurNet = FCN(lDims=[sum(sublist(lPartyDims, self.lAPs)), 256, 10])
@@ -131,8 +131,11 @@ class SGBACb(VFLCallback):
 		optRec = AdamW(self.zRecNet.parameters(), lr=self.args.fRecLr)
 		optSur = AdamW(self.zSurNet.parameters(), lr=self.args.fSurLr)
 
-		lrsRec = lrs.ConstantLR(optRec, factor=0.8, total_iters=5)
 		# lrsRec = createLRS(optRec)
+		# lrsRec = lrs.ConstantLR(optRec, factor=0.8, total_iters=10)
+		scheduler1 = lrs.LinearLR(optRec, start_factor=0.1, total_iters=5)
+		# scheduler2 = lrs.MultiStepLR(optRec, [30], 0.7)
+		lrsRec = lrs.ChainedScheduler([scheduler1], optRec)
 		lrsSur = createLRS(optSur)
 
 		return [optRec, optSur], [lrsRec, lrsSur]
@@ -164,7 +167,8 @@ class SGBACb(VFLCallback):
 
 		# 针对每个节点计算重构损失
 		lLoss = [calcVecLoss(a, b, 'Huber/N') for a, b in zip(lRecOut, lEmbeds, strict=True)]
-		vLoss = tc.mean(tc.stack(lLoss))
+		# vLoss = tc.mean(tc.stack(lLoss))
+		vLoss = tc.mean(tc.stack(lLoss)) + 5 * tc.std(tc.stack(lLoss))
 
 		return lRecons, vLoss
 
@@ -257,12 +261,12 @@ class SGBACb(VFLCallback):
 	def doSGBA(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""执行 SGBA 攻击。"""
 		# 重构损失的缩放与反向传播
-		p = segment(m.current_epoch, ins=(15, 25), out=self.args.lLossScales)
+		p = segment(m.current_epoch, ins=(10, 30), out=self.args.lLossScales)
 		m.logDict({'value/LossScale': p})
 		m.manual_backward(self.vReconLoss * p, retain_graph=True)
 
 		# 目的样本梯度的缩放
-		value = segment(m.current_epoch, ins=(15, 25), out=self.args.lGradScales)
+		value = segment(m.current_epoch, ins=(10, 30), out=self.args.lGradScales)
 		m.logDict({'value/GradScale': value})
 		if self.tDstMask.any():
 			for idx in self.lRPs:
@@ -359,7 +363,11 @@ class SGBACb(VFLCallback):
 		# 计算代理模型的熵值损失
 		vEntropy = -(F.softmax(tSurOut, dim=1) * F.log_softmax(tSurOut, dim=1)).sum(dim=1).mean()
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
-		[tGrad] = tc.autograd.grad(1500 * vCELoss - 2000 * vEntropy, [tSurIns])  # ! 调整权重
+
+		v1 = segment(m.current_epoch, ins=(20, 30), out=(10, 100))
+		v2 = segment(m.current_epoch, ins=(20, 30), out=(100, 2000))
+		m.logDict({'value/SurVic': v1, 'value/SurVicEntropy': v2})
+		[tGrad] = tc.autograd.grad(v1 * vCELoss - v2 * vEntropy, [tSurIns])  # ! 调整权重
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
 		m.manual_backward(tPoison, tGrad, retain_graph=True)
 		m.logDict({'loss/SurVic': vCELoss, 'loss/SurVicEntropy': vEntropy})
@@ -374,7 +382,10 @@ class SGBACb(VFLCallback):
 		# 计算代理模型的分类损失（标签未修改）
 		vCELoss = self.criSur(tSurOut, tInferLabels)  # 交叉熵损失
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
-		[tGrad] = tc.autograd.grad(2000 * vCELoss, [tSurIns])  # ! 调整权重
+
+		v1 = segment(m.current_epoch, ins=(20, 30), out=(100, 2000))
+		m.logDict({'value/SurVicPart': v1})
+		[tGrad] = tc.autograd.grad(v1 * vCELoss, [tSurIns])  # ! 调整权重
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
 		m.manual_backward(tPoison, tGrad, retain_graph=True)
 		m.logDict({'loss/SurVicPart': vCELoss})
