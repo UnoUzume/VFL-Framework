@@ -37,14 +37,11 @@ class LightningArch(L.LightningModule, ABC):
 			dpRoot: 模型保存和日志记录的根目录路径
 		"""
 		super().__init__()
-		self.automatic_optimization = False  #! 启用手动优化
+		self.automatic_optimization = False  # ! 启用手动优化
 
 		self.dpRoot = Path(dpRoot)
 		"""模型保存和日志记录的根目录路径"""
 		self.dpRoot.mkdir(parents=True, exist_ok=True)
-
-		self.logText = createFileLogger(self.dpRoot / 'train.log')
-		"""文本日志记录器"""
 
 		self.ns = SimpleNamespace()
 		"""命名空间，用于存储模型训练过程中的临时变量"""
@@ -248,6 +245,9 @@ class BaseVFLArch(LightningArch, VFLCallback, ABC):
 
 	@override
 	def on_fit_start(self) -> None:
+		self.logText = createFileLogger(Path(notNone(self.trainer.log_dir)) / 'train.log')
+		"""文本日志记录器"""
+
 		self._executeCallback(VFLCallback.onFitStart)
 
 	@override

@@ -3,6 +3,7 @@
 本模块提供了纵向联邦学习所需的各类配置对象，包括模型结构、训练参数和应用设置。
 """
 
+import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import InitVar, dataclass, field
@@ -16,6 +17,47 @@ from models.fcn import FCN
 from models.resnet import ResNet18
 from utils.common import Path, nn
 from utils.module import DataConfig
+
+
+def backup_entry_script(target_dir: str | Path) -> Path | None:
+	"""将当前运行的入口脚本文件 (.py) 复制到指定目录。
+
+	Args:
+		target_dir: 目标目录路径（字符串或 Path 对象）
+
+	Returns:
+		Path: 复制后的文件完整路径，如果失败则返回 None
+	"""
+	# 1. 获取入口文件路径 (逻辑同 _getAppName)
+	if not sys.argv or not sys.argv[0]:
+		return None
+
+	src_file = Path(sys.argv[0]).resolve()
+
+	# 2. 安全校验：确保是 Python 文件且物理存在
+	if src_file.suffix != '.py' or not src_file.is_file():
+		return None
+
+	# 3. 准备目标目录
+	dst_path = Path(target_dir).resolve()
+
+	try:
+		# 确保目标文件夹存在，不存在则递归创建 (mkdir -p)
+		dst_path.mkdir(parents=True, exist_ok=True)
+
+		# 构造目标文件的完整路径
+		dst_file = dst_path / src_file.name
+
+		# 4. 执行复制
+		# 使用 copy2 会尝试保留源文件的元数据（如修改时间、权限等）
+		shutil.copy2(src_file, dst_file)
+
+		return dst_file
+
+	except OSError as e:
+		# 在实际应用中，建议这里改用 logging 记录异常
+		print(f'复制入口文件失败：{e}')
+		return None
 
 
 def _getAppName() -> str | None:
@@ -65,7 +107,7 @@ def getAppName() -> str:
 
 
 def createLRS(
-	optimizer: Optimizer, milestones: list[int] | None = None, gamma: float = 0.8
+	optimizer: Optimizer, milestones: list[int] | None = None, gamma: float = 0.7
 ) -> lrs.LRScheduler:
 	"""创建学习率调度器链。
 
@@ -80,7 +122,7 @@ def createLRS(
 		组合后的学习率调度器
 	"""
 	if milestones is None:
-		milestones = [5, 15, 25, 35]
+		milestones = [5, 20, 30]
 	scheduler1 = lrs.LinearLR(optimizer, 0.1, total_iters=milestones[0])
 	scheduler2 = lrs.MultiStepLR(optimizer, milestones[1:], gamma)
 	return lrs.ChainedScheduler([scheduler1, scheduler2], optimizer)

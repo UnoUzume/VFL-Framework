@@ -86,6 +86,11 @@ class MethodArgs:
 	"""生成网络的损失缩放比例"""
 	lGradScales: tuple[float, float]
 	"""投毒目标的梯度缩放比例"""
+	milestones: list[int]
+	gamma: float
+	lVicScales: tuple[float, float]
+	lVicEntropyScales: tuple[float, float]
+	lVicPartScales: tuple[float, float]
 
 
 class SGBACb(VFLCallback):
@@ -136,7 +141,7 @@ class SGBACb(VFLCallback):
 		scheduler1 = lrs.LinearLR(optRec, start_factor=0.1, total_iters=5)
 		# scheduler2 = lrs.MultiStepLR(optRec, [30], 0.7)
 		lrsRec = lrs.ChainedScheduler([scheduler1], optRec)
-		lrsSur = createLRS(optSur)
+		lrsSur = createLRS(optSur, milestones=self.args.milestones, gamma=self.args.gamma)
 
 		return [optRec, optSur], [lrsRec, lrsSur]
 
@@ -364,8 +369,8 @@ class SGBACb(VFLCallback):
 		vEntropy = -(F.softmax(tSurOut, dim=1) * F.log_softmax(tSurOut, dim=1)).sum(dim=1).mean()
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
 
-		v1 = segment(m.current_epoch, ins=(20, 30), out=(10, 100))
-		v2 = segment(m.current_epoch, ins=(20, 30), out=(100, 2000))
+		v1 = segment(m.current_epoch, ins=(20, 30), out=self.args.lVicScales)
+		v2 = segment(m.current_epoch, ins=(20, 30), out=self.args.lVicEntropyScales)
 		m.logDict({'value/SurVic': v1, 'value/SurVicEntropy': v2})
 		[tGrad] = tc.autograd.grad(v1 * vCELoss - v2 * vEntropy, [tSurIns])  # ! 调整权重
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
@@ -383,7 +388,7 @@ class SGBACb(VFLCallback):
 		vCELoss = self.criSur(tSurOut, tInferLabels)  # 交叉熵损失
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
 
-		v1 = segment(m.current_epoch, ins=(20, 30), out=(100, 2000))
+		v1 = segment(m.current_epoch, ins=(20, 30), out=self.args.lVicPartScales)
 		m.logDict({'value/SurVicPart': v1})
 		[tGrad] = tc.autograd.grad(v1 * vCELoss, [tSurIns])  # ! 调整权重
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）

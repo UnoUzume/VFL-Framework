@@ -9,9 +9,9 @@ from typing import override
 from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE, VFLCallback
 from utils.define import StepVars
-from utils.misc import accuracy
+from utils.misc import accuracy, notNone
 
-from .config import AppConfig
+from .config import AppConfig, backup_entry_script
 
 
 class VFLArch(BaseVFLArch):
@@ -28,7 +28,6 @@ class VFLArch(BaseVFLArch):
 				lCallbacks: 回调函数列表，用于在训练过程中执行自定义逻辑
 		"""
 		super().__init__(config.dpRoot, lCallbacks)
-		self.logText.info(f'{self.__class__.__name__}.__init__()')
 		self.cfg = config
 
 		self.lBtmNets = config.model.getBtmNets()
@@ -45,6 +44,7 @@ class VFLArch(BaseVFLArch):
 	@override
 	def onFitStart(self, m: BaseVFLArch) -> None:
 		m.logText.info(m.trainer.log_dir)
+		backup_entry_script(notNone(self.trainer.log_dir))
 
 	@override
 	def onTrainStepVars(self, m: BaseVFLArch, v: StepVars) -> None:
