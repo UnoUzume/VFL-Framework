@@ -24,7 +24,7 @@ args = MethodArgs(
 	fValAlpha=0.7,
 	lLossScales=(2e-4, 2e-3),
 	lGradScales=(15.0, 3.0),
-	milestones=[5, 20, 35],
+	milestones=[5, 50],
 	gamma=0.8,
 	lVicScales=(10, 10),
 	lVicEntropyScales=(100, 100),
@@ -56,7 +56,7 @@ def main() -> None:
 		[
 			InferCb(0.03),
 			SGBACb(args, app),
-			VFLIPCb(app.dpRoot, model.lPartyDims, 0.02, 0.02),
+			VFLIPCb(app.dpRoot, model.lPartyDims, 0.01, 0.01),
 		],
 	)
 
@@ -77,7 +77,7 @@ def main() -> None:
 
 if __name__ == '__main__':
 	iSeed = int(time.time())
-	lSeed = [iSeed + i for i in range(5)]
+	lSeed = [iSeed + i for i in range(7)]
 	for seed in lSeed:
 		init(seed)
 		main()
