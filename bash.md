@@ -51,3 +51,7 @@ tensorboard --port 6007 --logdir data/logs/XXX/lightning_logs
 **Git**
 git config --global user.name "Sasara"
 git config --global user.email "sasara@users.noreply.github.com"
+
+**清理 .ckpt**
+find . -name "*.ckpt" -type f
+find . -name "*.ckpt" -type f -delete

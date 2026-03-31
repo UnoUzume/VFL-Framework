@@ -26,14 +26,18 @@ args = MethodArgs(
 	lGradScales=(15.0, 3.0),
 	milestones=[5, 50],
 	gamma=0.8,
-	lVicScales=(10, 10),
-	lVicEntropyScales=(100, 100),
-	lVicPartScales=(100, 100),
+	lVicScales=(150, 150),
+	lVicEntropyScales=(150, 150),
+	lVicPartScales=(1000, 1000),
 )
 
 
 def configOptims(m: BaseVFLArch, lr: float) -> OPT_TYPE:
-	"""配置优化器和学习率调度器。"""
+	"""配置优化器和学习率调度器。
+
+	Returns:
+		优化器和学习率调度器列表
+	"""
 	optBtms = [Adam(net.parameters(), lr) for net in m.lBtmNets]
 	optTop = Adam(m.zTopNet.parameters(), lr)
 
