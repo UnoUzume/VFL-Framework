@@ -172,7 +172,6 @@ class SGBACb(VFLCallback):
 
 		# 针对每个节点计算重构损失
 		lLoss = [calcVecLoss(a, b, 'Huber/N') for a, b in zip(lRecOut, lEmbeds, strict=True)]
-		# vLoss = tc.mean(tc.stack(lLoss))
 		vLoss = tc.mean(tc.stack(lLoss)) + 5 * tc.std(tc.stack(lLoss))
 
 		return lRecons, vLoss
@@ -301,7 +300,7 @@ class SGBACb(VFLCallback):
 		# 获取受控节点接收的关于嵌入的梯度，拼接
 		tRawGrad = tc.cat(sublist(v.lBtmOutGrad, self.lAPs), dim=1)
 		# 计算代理模型的梯度损失
-		vGradLoss = calcVecLoss(tSurGrad, tRawGrad, method='L2/N')
+		vGradLoss = calcVecLoss(tSurGrad, tRawGrad, method='Huber/N')
 
 		# 计算代理模型的总损失
 		tSurLoss = 5 * vModelLoss + 10 * vGradLoss  # ! 调整权重
@@ -435,7 +434,7 @@ class SGBACb(VFLCallback):
 
 	def logSur(self, m: BaseVFLArch, k: str, v: StepVars) -> None:
 		"""记录代理模型损失。"""
-		tSurIns = tc.cat(sublist(v.lBtmOut, self.lAPs), dim=1)
+		tSurIns = tc.cat(sublist(v.lTopIns, self.lAPs), dim=1)
 		tSurOut = self.zSurNet(tSurIns)
 
 		[acc1, acc3] = accuracy(tSurOut, v.labels, (1, 3))

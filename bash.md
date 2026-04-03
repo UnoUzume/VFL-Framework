@@ -1,4 +1,4 @@
-
+## Jupyter 目录
 
 **学术加速**
 source /etc/network_turbo
@@ -8,22 +8,24 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 *重启*
 
 **在 Jupyter 工作目录创建 VSCode 文件夹**
-
 mkdir VSCode
 cd VSCode
-mkdir VFL-Framework
-cd VFL-Framework
-unzip VFL-Framework.zip
+
+**多实例共享密钥文件**
+ln -sf /root/autodl-fs/ssh_keys/config ~/.ssh/config
+
+**下载项目**
+git clone https://github.com/UnoUzume/VFL-Framework.git
+
+## 项目目录
 
 `~/VSCode/VFL-Framework#`
 
-uv python install 3.12（uv sync 自动）
+uv python install 3.12
 uv sync
 
 mkdir -p /root/autodl-tmp/VFL-Framework/data
 ln -s /root/autodl-tmp/VFL-Framework/data data
-
-
 
 **准备数据集**
 mkdir -p data/datasets/cifar10

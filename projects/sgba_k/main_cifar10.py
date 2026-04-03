@@ -81,7 +81,7 @@ def main() -> None:
 
 if __name__ == '__main__':
 	iSeed = int(time.time())
-	lSeed = [iSeed + i for i in range(7)]
+	lSeed = [iSeed + i for i in range(3)]
 	for seed in lSeed:
 		init(seed)
 		main()

@@ -14,6 +14,40 @@ from utils.define import StepVars
 from utils.misc import accuracy, segment
 
 
+def calcVecLoss(a: tc.Tensor, b: tc.Tensor, method: str = 'MSE') -> tc.Tensor:
+	"""计算批次损失，支持多种损失函数。
+
+	Args:
+		a: 预测向量，形状为 `(nBatch, nDim)`
+		b: 目标向量，形状为 `(nBatch, nDim)`
+		method: 损失函数，可选 `'SSE'`、`'SSE/N'`、`'MSE'`、`'L2.ND'`、`'L2.D/N'`
+
+	Returns:
+		批次损失
+
+	Raises:
+		ValueError: 损失函数未知
+	"""
+	if method == 'SSE':
+		loss = F.mse_loss(a, b, reduction='sum')
+	elif method == 'SSE/N':  # 样本 SSE，批量平均
+		loss = F.mse_loss(a, b, reduction='sum') / len(a)
+	elif method == 'MSE':
+		loss = F.mse_loss(a, b, reduction='mean')
+	elif method == 'Huber/N':  # 样本 Huber 损失，批量平均
+		loss = F.huber_loss(a, b, reduction='sum', delta=1.0) / len(a)
+	elif method == 'Huber':
+		loss = F.huber_loss(a, b, reduction='mean', delta=1.0)
+	elif method == 'L2/N':  # 样本 L2 距离，批量平均
+		loss = tc.norm(a - b, p=2, dim=1).mean()
+	elif method == 'L2':
+		loss = tc.norm(a - b, p=2)
+	else:
+		msg = f'损失函数未知：{method}！'
+		raise ValueError(msg)
+	return loss
+
+
 @dataclass
 class MethodArgs:
 	"""SGBA 攻击方法参数配置类
@@ -59,7 +93,7 @@ class SGBACb(VFLCallback):
 		self.cfg = config
 
 		nDim = self.cfg.model.lPartyDims[0]
-		self.zRecNet = FCN([nDim, int(nDim * 0.75), nDim], False)  # ! 可变
+		self.zRecNet = FCN(lDims=[nDim, int(nDim * 0.8), int(nDim * 0.8), nDim], hasBN=False)  # ! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
 	@override
@@ -68,8 +102,8 @@ class SGBACb(VFLCallback):
 
 	@override
 	def onConfigOptims(self) -> OPT_TYPE:
-		optRec = AdamW(self.zRecNet.parameters(), self.args.fRecLr)
-		lrsRec = lrs.ConstantLR(optRec, 0.8, 5)
+		optRec = AdamW(self.zRecNet.parameters(), lr=self.args.fRecLr)
+		lrsRec = lrs.LinearLR(optRec, start_factor=0.1, total_iters=5)
 		return [optRec], [lrsRec]
 
 	def getRecon(self, tEmbed: tc.Tensor, alpha: float = 1.0) -> tuple[tc.Tensor, tc.Tensor]:
@@ -86,10 +120,9 @@ class SGBACb(VFLCallback):
 		# 生成重构输出
 		tRecOut = self.zRecNet(tEmbed)
 		# 根据 alpha 混合重构输出
-		tRecon = tRecOut * alpha + tEmbed * (1 - alpha)
+		tRecon = alpha * tRecOut + (1 - alpha) * tEmbed
 		# 计算重构损失
-		# vLoss = F.mse_loss(tEmbed, tRecon, reduction='sum') / len(v.indices)  # MSE Loss
-		vLoss = tc.norm(tRecOut - tEmbed, 2, 1).mean()  # L2 Loss
+		vLoss = calcVecLoss(tRecOut, tEmbed, 'Huber/N')
 
 		return tRecon, vLoss
 
@@ -105,9 +138,9 @@ class SGBACb(VFLCallback):
 	def switch(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""用于恶意关联的样本切换"""
 		# 获取投毒目的样本（属于目标类样本）的掩码
-		self.tDstMask = tc.isin(v.indices, m.ns.tDstIdxs)
+		self.tDstMask = tc.isin(v.indices, m.ns.tDstIds)
 		# 获取受害类样本的掩码
-		self.tVicMask = tc.isin(v.indices, m.ns.tVicIdxs)
+		self.tVicMask = tc.isin(v.indices, m.ns.tVicIds)
 
 		# 批次内部样本切换
 		if self.tDstMask.any() and self.tVicMask.any():

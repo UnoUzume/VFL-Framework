@@ -12,6 +12,15 @@ from utils.module import DataConfig, SplitDataModule
 
 from .core import MethodArgs, SGBACb
 
+# 方法参数
+args = MethodArgs(
+	fRecLr=5e-4,
+	fTrainAlpha=0.3,
+	fValAlpha=0.7,
+	lLossScales=(1e-4, 1e-3),
+	lGradScales=(10.0, 5.0),
+)
+
 
 def main(lTopDims: list[int]) -> None:
 	"""运行 SGBA 实验主函数
@@ -24,11 +33,6 @@ def main(lTopDims: list[int]) -> None:
 	model = ModelConfig([64] * 4, lTopDims)
 	run = RunConfig(0.001, 40)
 	app = AppConfig(data, model, run, fpCkpt=None)
-
-	# 方法参数
-	args = MethodArgs(
-		fRecLr=5e-4, fTrainAlpha=0.3, fValAlpha=0.7, lLossScales=(1e-4, 1e-3), lGradScales=(10.0, 5.0)
-	)
 
 	# 模型架构
 	arch = VFLArch(
@@ -43,6 +47,7 @@ def main(lTopDims: list[int]) -> None:
 	# 数据模块
 	module = SplitDataModule(len(model.lPartyDims), data)
 
+	# 训练器
 	trainer = L.Trainer(
 		deterministic=True,
 		max_epochs=arch.cfg.run.epochs,
@@ -55,7 +60,8 @@ def main(lTopDims: list[int]) -> None:
 
 
 if __name__ == '__main__':
-	lSeed = [int(time.time())]
+	iSeed = int(time.time())
+	lSeed = [iSeed + i for i in range(3)]
 	llDims = [
 		# [256, 10],
 		[256, 256, 10],
