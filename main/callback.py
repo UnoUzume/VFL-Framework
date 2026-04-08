@@ -45,7 +45,7 @@ OPT_TYPE = list[Optimizer] | tuple[list[Optimizer], list[lr.LRScheduler]]
 """优化器配置的类型别名"""
 
 
-class VFLCallback:
+class VFLCallback:  # noqa: PLR0904
 	"""VFL 回调基类。
 
 	所有自定义的 VFL 逻辑（如攻击、防御、特定指标记录）都应继承此类，
@@ -186,6 +186,9 @@ class VFLCallback:
 
 	def onTrainEpochEnd(self, m: 'BaseVFLArch') -> None:
 		"""在训练轮次结束时调用。**位于 onValEpochEnd() 之后。**"""
+
+	def onFitEnd(self, m: 'BaseVFLArch') -> None:
+		"""在整个训练流程结束时调用。"""
 
 	# ============
 	# 验证过程的回调函数

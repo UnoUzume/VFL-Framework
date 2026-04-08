@@ -325,6 +325,10 @@ class BaseVFLArch(LightningArch, VFLCallback, ABC):
 			lrs.step()  # pyright: ignore[reportCallIssue]
 		self._executeCallback(VFLCallback.onTrainEpochEnd)
 
+	@override
+	def on_fit_end(self) -> None:
+		self._executeCallback(VFLCallback.onFitEnd)
+
 	# ============
 	# 验证阶段
 	# ============

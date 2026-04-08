@@ -11,7 +11,7 @@ from models.fcn import FCN
 from utils.common import Path, copy, nn, np, tc
 from utils.config import rng
 from utils.define import StepVars
-from utils.misc import notNone
+from utils.misc import accuracy, notNone
 
 
 class MAE(nn.Module):
@@ -475,6 +475,11 @@ class VFLIPCb(VFLCallback):
 	# ============
 
 	@override
+	def onFitStart(self, m: BaseVFLArch) -> None:
+		# 初始化一个全局容器，用于存放所有 epoch 的数据
+		self.dEpochRecords: dict[int, dict[str, tc.Tensor]] = {}
+
+	@override
 	def onTrainEpochStart(self, m: BaseVFLArch) -> None:
 		self.lTrainEmbeds = []  # 初始化训练样本的嵌入列表
 
@@ -533,7 +538,8 @@ class VFLIPCb(VFLCallback):
 		# 计算熵阈值
 		self.calcEntropyThres(m)
 
-		self.lEntropy: list[tc.Tensor] = []  # 初始化熵列表
+		# 初始化热力图数据收集器
+		self.dBatchRecords: dict[str, list[tc.Tensor]] = {'is_attack': [], 'labels': [], 'entropy': []}
 
 	def calcEntropyThres(self, m: BaseVFLArch) -> None:
 		"""计算熵阈值，用于检测低熵样本。
@@ -541,128 +547,143 @@ class VFLIPCb(VFLCallback):
 		Args:
 			m: VFL 架构实例
 		"""
-		lAllEntropy = []  # 所有熵值列表
-		for tRawEmbeds in self.lTrainEmbeds:  # * [nBatchSize, nDim] | nBatch
+		# 初始化所有熵值列表
+		lAllEntropy = []  # * -> [nBatch, (nBatchSize, nParty)]
+		for tRawEmbeds in self.lTrainEmbeds:  # * nBatch | (nBatchSize, nDim)
 			# 获取每个掩码的净化嵌入
-			lPurify = self.vflip.single(tRawEmbeds)  # * [nParty, [nBatchSize, nDim]]
-			lEntropy = []
-			for purify in lPurify:  # * [nBatchSize, nDim] | nParty
+			lPurify = self.vflip.single(tRawEmbeds)  # * [nParty, (nBatchSize, nDim)]
+			lEntropy = []  # * -> [nParty, (nBatchSize)]
+			for purify in lPurify:  # * nParty | (nBatchSize, nDim)
 				# 将净化嵌入分割为各参与方嵌入
 				lTopIns = list(tc.split(purify, self.lPartyDims, 1))
 				# 通过顶层网络获取输出
-				zTopOut = m.zTopNet(lTopIns)  # * [nBatchSize, nClass]
+				zTopOut = m.zTopNet(lTopIns)  # * (nBatchSize, nClass)
 				# 计算类别概率
-				probs = tc.nn.functional.softmax(zTopOut, dim=1)  # * [nBatchSize, nClass]
-				# 计算熵值 # * [nBatchSize]
-				entropy = tc.distributions.Categorical(probs).entropy()
-				lEntropy.append(entropy)  # * [nParty, [nBatchSize]]
-
-			tEntropy = tc.stack(lEntropy, 1)  # 拼接熵值 #* [nBatchSize, nParty]
-			lAllEntropy.append(tEntropy)  # * [nBatch, [nBatchSize, nParty]]
-		tAllEntropy = tc.cat(lAllEntropy, 0)  # 拼接所有批次的熵值 #* [nTrainSize, nParty]
-		self.tEntropyMean = tc.mean(tAllEntropy, 0)  # 计算熵值均值 #* [nParty]
-		# 最后一个 epoch 保存熵值均值
-		if m.current_epoch == notNone(m.trainer.max_epochs) - 1:
-			tc.save(self.tEntropyMean, Path(notNone(m.trainer.log_dir)) / 'tEntropyMean.pt')
+				probs = tc.nn.functional.softmax(zTopOut, dim=1)  # * (nBatchSize, nClass)
+				# 计算熵值
+				entropy = tc.distributions.Categorical(probs).entropy()  # * (nBatchSize)
+				lEntropy.append(entropy)
+			# 拼接熵值 # * (nBatchSize, nParty)
+			tEntropy = tc.stack(lEntropy, 1)
+			lAllEntropy.append(tEntropy)
+			# 拼接所有批次的熵值 # * (nTrainSize, nParty)
+		tAllEntropy = tc.cat(lAllEntropy, 0)
+		# 计算熵值均值 # * (nParty)
+		self.tMeanEntropy = tc.mean(tAllEntropy, 0)
 
 	@override
 	def onValTopIns(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		if m.trainer.sanity_checking:
 			return
 
-		# 初始化占位变量
-		vOD = d['Origin']  # 原始数据净化（异常检测）
-		vOE = d['Origin']  # 原始数据净化（熵值检测）
-		vAD = d['Attack']  # 攻击数据净化（异常检测）
-		vAE = d['Attack']  # 攻击数据净化（熵值检测）
-		# 获取各参与方嵌入维度
-		lTopInsDims = [t.size(1) for t in vOD.lTopIns]
-
+		dPurified = {}
+		lTopInsDims = [t.size(dim=1) for t in d['Origin'].lTopIns]
 		for k, v in d.items():  # 针对原始样本和攻击样本
+			# ! 收集热力图数据
+			isAttack = 1 if k == 'Attack' else 0
+			self.dBatchRecords['is_attack'].append(tc.full((len(v.labels),), isAttack))  # * (nBatchSize)
+			self.dBatchRecords['labels'].append(v.labels.cpu())  # * (nBatchSize)
+
 			# 拼接顶层输入获取原始嵌入
-			tRawEmbeds = tc.cat(v.lTopIns, 1)  # * [nBatchSize, nDim]
+			tRawEmbeds = tc.cat(v.lTopIns, 1)  # * (nBatchSize, nDim)
 
-			# region 异常分数检测
+			# A. 异常分数检测  # * (nBatchSize, nParty)
+			tIsAnomaly = self._detect_anomaly(m, k, tRawEmbeds)
 
-			# 检测异常样本
-			tIsAnomaly = self.vflip.detect(tRawEmbeds)  # * [nBatchSize, nParty]
+			# B. 概率熵值检测  # * (nBatchSize, nParty)
+			tIsLowEntropy = self._detect_entropy(m, k, tRawEmbeds, lTopInsDims)
 
-			# 记录各参与方异常检测准确率
-			acc = tIsAnomaly.float().mean(0)  # * [nParty]
-			m.logDict({f'det/Loader{k}/Party{i}': acc[i] for i in range(acc.size(0))})
+			# C. 执行特征净化并保存到新变量
+			dPurified[f'{k}D'] = self._purify_embeds(v, tRawEmbeds, tIsAnomaly, lTopInsDims)
+			dPurified[f'{k}E'] = self._purify_embeds(v, tRawEmbeds, tIsLowEntropy, lTopInsDims)
 
-			# 记录全异常样本比例
-			tIsBad = tIsAnomaly.all(1)  # * [nBatchSize]
-			m.logDict({f'det/Loader{k}/Bad': tIsBad.float().mean()})
+		# 批量更新字典
+		d.update(dPurified)
 
-			# endregion
+	# ==========================================
+	# 子模块 1: 异常分数检测
+	# ==========================================
+	def _detect_anomaly(self, m: BaseVFLArch, k: str, tRawEmbeds: tc.Tensor) -> tc.Tensor:
+		# 检测异常样本
+		tIsAnomaly = self.vflip.detect(tRawEmbeds)  # * [nBatchSize, nParty]
 
-			# region 概率熵值检测
+		# 记录各参与方异常检测准确率
+		acc = tIsAnomaly.float().mean(0)  # * [nParty]
+		m.logDict({f'det/Loader{k}/Party{i}': acc[i] for i in range(acc.size(0))})
 
-			# 获取每个掩码的净化嵌入
-			lPurify = self.vflip.single(tRawEmbeds)  # * [nParty, [nBatchSize, nDim]]
-			lEntropy = []
-			for purify in lPurify:  # * [nBatchSize, nDim] | nParty
-				# 将净化嵌入分割为各参与方嵌入
-				lTopIns = list(tc.split(purify, lTopInsDims, 1))
-				# 通过顶层网络获取输出
-				zTopOut = m.zTopNet(lTopIns)  # * [nBatchSize, nClass]
-				# 计算类别概率
-				probs = tc.nn.functional.softmax(zTopOut, dim=1)  # * [nBatchSize, nClass]
-				# 计算熵值 #* [nBatchSize]
-				entropy = tc.distributions.Categorical(probs).entropy()
-				lEntropy.append(entropy)  # * [nParty, [nBatchSize]]
+		# 记录全异常样本比例
+		tIsBad = tIsAnomaly.all(1)  # * [nBatchSize]
+		m.logDict({f'det/Loader{k}/Bad': tIsBad.float().mean()})
 
-			tEntropy = tc.stack(lEntropy, 1)  # 拼接熵值 # * [nBatchSize, nParty]
-			if k == 'Attack':  # 仅保存攻击样本的熵值
-				self.lEntropy.append(tEntropy)
-			# 检测低熵样本：熵值小于 M*均值 且 熵值小于 N*最大熵
-			temp = tEntropy < self.M * self.tEntropyMean
-			tIsLowEntropy = tc.logical_and(temp, tEntropy < (self.N * tEntropy.max(1)[0][:, None]))
+		return tIsAnomaly
 
-			# 记录各参与方低熵检测准确率
-			acc = tIsLowEntropy.float().mean(0)  # * [nParty]
-			m.logDict({f'ent/Loader{k}/Party{i}': acc[i] for i in range(acc.size(0))})
+	# ==========================================
+	# 子模块 2: 概率熵值计算与检测
+	# ==========================================
+	def _detect_entropy(
+		self, m: BaseVFLArch, k: str, tRawEmbeds: tc.Tensor, lTopInsDims: list[int]
+	) -> tc.Tensor:
+		# 获取每个掩码的净化嵌入
+		lPurify = self.vflip.single(tRawEmbeds)  # * [nParty, [nBatchSize, nDim]]
+		lEntropy = []
+		for purify in lPurify:  # * [nBatchSize, nDim] | nParty
+			# 将净化嵌入分割为各参与方嵌入
+			lTopIns = list(tc.split(purify, lTopInsDims, 1))
+			# 通过顶层网络获取输出
+			tLogits = m.zTopNet(lTopIns)  # * [nBatchSize, nClass]
+			# 计算类别概率
+			tProbs = tc.nn.functional.softmax(tLogits, dim=1)  # * [nBatchSize, nClass]
+			# 计算熵值 #* [nBatchSize]
+			entropy = tc.distributions.Categorical(tProbs).entropy()
+			lEntropy.append(entropy)  # * [nParty, [nBatchSize]]
 
-			# 记录全低熵样本比例
-			tIsBad = tIsLowEntropy.all(1)  # * [nBatchSize]
-			m.logDict({f'ent/Loader{k}/Bad': tIsBad.float().mean()})
+		tEntropy = tc.stack(lEntropy, 1)  # 拼接熵值 # * (nBatchSize, nParty)
 
-			# endregion
+		# 检测低熵样本：熵值小于 M*均值 且 熵值小于 N*最大熵
+		temp1 = tEntropy < self.M * self.tMeanEntropy
+		temp2 = tEntropy < self.N * tEntropy.amax(dim=1, keepdim=True)
+		tIsLowEntropy = temp1 & temp2
 
-			# 净化原始数据
-			if k == 'Origin':
-				vOD = copy(v)  # 复制原始步骤变量
-				purify = self.vflip.purify(tRawEmbeds, tIsAnomaly)  # 基于异常检测净化
-				vOD.lTopIns = list(tc.split(purify, lTopInsDims, 1))  # 更新顶层输入
+		# 记录各参与方低熵检测准确率
+		acc = tIsLowEntropy.float().mean(0)  # * [nParty]
+		m.logDict({f'ent/Loader{k}/Party{i}': acc[i] for i in range(acc.size(0))})
 
-				vOE = copy(v)  # 复制原始步骤变量
-				purify = self.vflip.purify(tRawEmbeds, tIsLowEntropy)  # 基于熵值检测净化
-				vOE.lTopIns = list(tc.split(purify, lTopInsDims, 1))  # 更新顶层输入
+		# 记录全低熵样本比例
+		tIsBad = tIsLowEntropy.all(1)  # * [nBatchSize]
+		m.logDict({f'ent/Loader{k}/Bad': tIsBad.float().mean()})
 
-			# 净化攻击数据
-			if k == 'Attack':
-				vAD = copy(v)  # 复制攻击步骤变量
-				purify = self.vflip.purify(tRawEmbeds, tIsAnomaly)  # 基于异常检测净化
-				vAD.lTopIns = list(tc.split(purify, lTopInsDims, 1))  # 更新顶层输入
+		# ! 收集热力图数据
+		self.dBatchRecords['entropy'].append(tEntropy.cpu())  # * (nBatchSize, nParty)
 
-				vAE = copy(v)  # 复制攻击步骤变量
-				purify = self.vflip.purify(tRawEmbeds, tIsLowEntropy)  # 基于熵值检测净化
-				vAE.lTopIns = list(tc.split(purify, lTopInsDims, 1))  # 更新顶层输入
+		return tIsLowEntropy
 
-		# 将净化后的步骤变量添加到字典
-		d['OriginD'] = vOD  # 原始数据净化（异常检测）
-		d['OriginE'] = vOE  # 原始数据净化（熵值检测）
-		d['AttackD'] = vAD  # 攻击数据净化（异常检测）
-		d['AttackE'] = vAE  # 攻击数据净化（熵值检测）
+	# ==========================================
+	# 子模块 3: 数据净化辅助函数
+	# ==========================================
+	def _purify_embeds(
+		self, v: StepVars, tRawEmbeds: tc.Tensor, tPartyMask: tc.Tensor, lTopInsDims: list[int]
+	) -> StepVars:
+		v_new = copy(v)
+		purified = self.vflip.purify(tRawEmbeds, tPartyMask)
+		v_new.lTopIns = list(tc.split(purified, lTopInsDims, dim=1))
+		return v_new
 
 	@override
 	def onValEpochEnd(self, m: BaseVFLArch) -> None:
 		if m.trainer.sanity_checking:
 			return
 
-		# 拼接并移至 CPU
-		temp = tc.cat(self.lEntropy, 0).cpu()  # * [nTrainSize, nParty]
-		# 最后一个 epoch 保存熵值
-		if m.current_epoch == notNone(m.trainer.max_epochs) - 1:
-			tc.save(temp, Path(notNone(m.trainer.log_dir)) / 'tEntropy.pt')
+		# 整理当前 Epoch 数据
+		self.dEpochRecords[m.current_epoch] = {
+			'is_attack': tc.cat(self.dBatchRecords['is_attack'], dim=0),  # * (2 * nTrainSize)
+			'labels': tc.cat(self.dBatchRecords['labels'], dim=0),  # * (2 * nTrainSize)
+			'entropy': tc.cat(self.dBatchRecords['entropy'], dim=0),  # * (2 * nTrainSize, nParty)
+			'mean_entropy': self.tMeanEntropy.cpu(),  # * (nParty)
+		}
+
+	@override
+	def onFitEnd(self, m: 'BaseVFLArch') -> None:
+		# 整个训练任务结束时，将所有数据保存为一个文件
+		file_path = Path(notNone(m.trainer.log_dir)) / 'dEpochRecords.pt'
+		tc.save(self.dEpochRecords, file_path)
+		print(f'\n[Done] All {len(self.dEpochRecords)} epochs saved to {file_path}')

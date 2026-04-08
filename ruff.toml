@@ -60,3 +60,4 @@ convention = "google"
 [lint.per-file-ignores]
 "examples/*" = ["INP001"]
 "projects/*" = ["INP001"]
+"scripts/*" = ["INP001"]

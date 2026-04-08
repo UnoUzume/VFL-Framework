@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import override
 
-from torch.optim import AdamW, lr_scheduler as lrs
+from torch.optim import AdamW
 
 from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE, VFLCallback
@@ -61,6 +61,34 @@ def calcVecLoss(a: tc.Tensor, b: tc.Tensor, method: str = 'MSE') -> tc.Tensor:
 	return loss
 
 
+def calcFidelity(tInputLogits: tc.Tensor, tRealLogits: tc.Tensor) -> tuple[float, float]:
+	"""计算保真度指标。
+
+	Args:
+			tInputLogits: 输入 Logits，形状 (batch_size, num_classes)
+			tRealLogits: 真实 Logits，形状 (batch_size, num_classes)
+
+	Returns:
+			consistency_rate: 决策一致率 (标量，范围 0.0 ~ 1.0)
+			kl_divergence: KL 散度均值 (标量)
+	"""
+	# 1. 计算决策一致率 (使用 Logits 求 argmax)
+	tRealPreds = tc.argmax(tRealLogits, dim=1)
+	tInputPreds = tc.argmax(tInputLogits, dim=1)
+	rConsistency: float = (tRealPreds == tInputPreds).float().mean().item()
+
+	# 2. 计算 KL 散度
+	# 将 Logits 转换为 Probs
+	tRealProbs = F.softmax(tRealLogits, dim=1)
+	tInputProbs = F.softmax(tInputLogits, dim=1)
+	# 计算代理模型的 LogProbs
+	tInputLogProbs = tc.log(tInputProbs + 1e-8)
+	# 计算 KL 散度
+	fKLDiv: float = F.kl_div(tInputLogProbs, tRealProbs, reduction='batchmean').item()
+
+	return rConsistency, fKLDiv
+
+
 @dataclass
 class MethodArgs:
 	"""SGBA 攻击方法参数配置类
@@ -88,9 +116,16 @@ class MethodArgs:
 	"""投毒目标的梯度缩放比例"""
 	milestones: list[int]
 	gamma: float
+	fSurLambda1: float
+	"""代理模型训练的分类损失系数"""
+	fSurLambda2: float
+	"""代理模型训练的梯度损失系数"""
 	lVicScales: tuple[float, float]
+	"""多节点投毒的分类损失系数"""
 	lVicEntropyScales: tuple[float, float]
+	"""多节点投毒的熵值损失系数"""
 	lVicPartScales: tuple[float, float]
+	"""单节点投毒的分类损失系数"""
 
 
 class SGBACb(VFLCallback):
@@ -108,7 +143,7 @@ class SGBACb(VFLCallback):
 		self.cfg = config
 		"""应用配置"""
 
-		self.lRPs = [0, 3, 4]
+		self.lRPs = [1, 2, 5]
 		"""攻击节点的索引列表"""
 		self.lSPs = [6]
 		"""辅助节点的索引列表"""
@@ -136,18 +171,14 @@ class SGBACb(VFLCallback):
 		optRec = AdamW(self.zRecNet.parameters(), lr=self.args.fRecLr)
 		optSur = AdamW(self.zSurNet.parameters(), lr=self.args.fSurLr)
 
-		# lrsRec = createLRS(optRec)
-		# lrsRec = lrs.ConstantLR(optRec, factor=0.8, total_iters=10)
-		scheduler1 = lrs.LinearLR(optRec, start_factor=0.1, total_iters=5)
-		# scheduler2 = lrs.MultiStepLR(optRec, [30], 0.7)
-		lrsRec = lrs.ChainedScheduler([scheduler1], optRec)
-		lrsSur = createLRS(optSur, milestones=self.args.milestones, gamma=self.args.gamma)
+		lrsRec = createLRS(optRec, milestones=[5, 10, 20], gamma=0.8)
+		lrsSur = createLRS(optSur, milestones=[5, 10, 20], gamma=0.8)
 
 		return [optRec, optSur], [lrsRec, lrsSur]
 
 	def getRecon(
 		self, lEmbeds: list[tc.Tensor], alpha: float = 1.0
-	) -> tuple[list[tc.Tensor], tc.Tensor]:
+	) -> tuple[list[tc.Tensor], tc.Tensor, tc.Tensor]:
 		"""生成重构嵌入。
 
 		Args:
@@ -172,9 +203,10 @@ class SGBACb(VFLCallback):
 
 		# 针对每个节点计算重构损失
 		lLoss = [calcVecLoss(a, b, 'Huber/N') for a, b in zip(lRecOut, lEmbeds, strict=True)]
-		vLoss = tc.mean(tc.stack(lLoss)) + 5 * tc.std(tc.stack(lLoss))
+		vLoss1 = tc.mean(tc.stack(lLoss))
+		vLoss2 = 10 * tc.std(tc.stack(lLoss))
 
-		return lRecons, vLoss
+		return lRecons, vLoss1, vLoss2
 
 	# ============
 	# 训练阶段
@@ -188,9 +220,9 @@ class SGBACb(VFLCallback):
 	def switch(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""执行样本切换。"""
 		# 获取投毒目的样本（属于目标类样本）的掩码
-		self.tDstMask = tc.isin(v.indices, m.ns.tDstIdxs)
+		self.tDstMask = tc.isin(v.indices, m.ns.tDstIds)
 		# 获取受害类样本的掩码
-		self.tVicMask = tc.isin(v.indices, m.ns.tVicIdxs)
+		self.tVicMask = tc.isin(v.indices, m.ns.tVicIds)
 
 		# # 在批次内部执行样本切换
 		if self.tDstMask.any() and self.tVicMask.any():
@@ -218,8 +250,15 @@ class SGBACb(VFLCallback):
 		# 计算重构损失
 		# ! 不使用 detach()，让底层模型也更新，降低生成网络的训练难度
 		lEmbeds = sublist(v.lBtmOut, self.lRPs)
-		_, self.vReconLoss = self.getRecon(lEmbeds)
-		m.logDict({'loss/ReconTrain': self.vReconLoss})
+		_, vLoss1, vLoss2 = self.getRecon(lEmbeds)
+		self.vReconLoss = vLoss1 + vLoss2
+		m.logDict(
+			{
+				'loss/ReconTrain': self.vReconLoss,
+				'loss/ReconTrain1': vLoss1,
+				'loss/ReconTrain2': vLoss2,
+			}
+		)
 
 		for idx in self.lRPs:
 			v.lBtmOut[idx] = v.lBtmOut[idx].clone()  # 避免 In-place 操作错误
@@ -228,12 +267,12 @@ class SGBACb(VFLCallback):
 		if self.tDstMask.any():
 			# ! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
 			lSubEmbeds = [t[self.tDstMask].detach() for t in sublist(v.lBtmOut, self.lRPs)]
-			lSubRecons, _ = self.getRecon(lSubEmbeds, self.args.fTrainAlpha)
+			lSubRecons, _, _ = self.getRecon(lSubEmbeds, self.args.fTrainAlpha)
 			for i, idx in enumerate(self.lRPs):
 				v.lBtmOut[idx][self.tDstMask] = lSubRecons[i]
 
 		# # 向受害类投毒（单节点随机投毒）
-		# if len(self.aVicPos) > 0:  #! 对受害类样本添加不完全触发器不应该触发后门
+		# if len(self.aVicPos) > 0:  # ! 对受害类样本添加不完全触发器不应该触发后门
 		# 	# 选择投毒来源样本（属于受害类样本）的位置
 		# 	aSrcPos = rng().choice(self.aVicPos, math.ceil(len(self.aVicPos) * 0.1), False)
 		# 	self.aSrcPos2 = aSrcPos
@@ -303,7 +342,7 @@ class SGBACb(VFLCallback):
 		vGradLoss = calcVecLoss(tSurGrad, tRawGrad, method='Huber/N')
 
 		# 计算代理模型的总损失
-		tSurLoss = 5 * vModelLoss + 10 * vGradLoss  # ! 调整权重
+		tSurLoss = self.args.fSurLambda1 * vModelLoss + self.args.fSurLambda2 * vGradLoss
 		# 执行反向传播，更新代理模型参数
 		m.manual_backward(tSurLoss, retain_graph=True)
 		m.logDict({'lossSur/Sur': tSurLoss, 'lossSur/Grad': vGradLoss, 'lossSur/Model': vModelLoss})
@@ -339,7 +378,7 @@ class SGBACb(VFLCallback):
 				tSampleLabels = m.ns.tInfers[tc.searchsorted(m.ns.tIDs, tVicIndices[tPerm])]
 
 			# 只有攻击节点生成重构嵌入，辅助节点的嵌入不变
-			lRecons, _ = self.getRecon(lSampleRP, self.args.fTrainAlpha)
+			lRecons, _, _ = self.getRecon(lSampleRP, self.args.fTrainAlpha)
 
 			if single:
 				# 对于每个样本，随机选择单个攻击节点进行投毒
@@ -368,10 +407,10 @@ class SGBACb(VFLCallback):
 		vEntropy = -(F.softmax(tSurOut, dim=1) * F.log_softmax(tSurOut, dim=1)).sum(dim=1).mean()
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
 
-		v1 = segment(m.current_epoch, ins=(20, 30), out=self.args.lVicScales)
-		v2 = segment(m.current_epoch, ins=(20, 30), out=self.args.lVicEntropyScales)
+		v1 = segment(m.current_epoch, ins=(15, 25), out=self.args.lVicScales)
+		v2 = segment(m.current_epoch, ins=(15, 25), out=self.args.lVicEntropyScales)
 		m.logDict({'value/SurVic': v1, 'value/SurVicEntropy': v2})
-		[tGrad] = tc.autograd.grad(v1 * vCELoss - v2 * vEntropy, [tSurIns])  # ! 调整权重
+		[tGrad] = tc.autograd.grad(v1 * vCELoss - v2 * vEntropy, [tSurIns])
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
 		m.manual_backward(tPoison, tGrad, retain_graph=True)
 		m.logDict({'loss/SurVic': vCELoss, 'loss/SurVicEntropy': vEntropy})
@@ -387,9 +426,9 @@ class SGBACb(VFLCallback):
 		vCELoss = self.criSur(tSurOut, tInferLabels)  # 交叉熵损失
 		# 计算代理模型产生的关于嵌入的梯度（代理模型参数的梯度未累积）
 
-		v1 = segment(m.current_epoch, ins=(20, 30), out=self.args.lVicPartScales)
+		v1 = segment(m.current_epoch, ins=(15, 25), out=self.args.lVicPartScales)
 		m.logDict({'value/SurVicPart': v1})
-		[tGrad] = tc.autograd.grad(v1 * vCELoss, [tSurIns])  # ! 调整权重
+		[tGrad] = tc.autograd.grad(v1 * vCELoss, [tSurIns])
 		# 执行反向传播，更新生成器参数（代理模型参数未更新）
 		m.manual_backward(tPoison, tGrad, retain_graph=True)
 		m.logDict({'loss/SurVicPart': vCELoss})
@@ -415,11 +454,12 @@ class SGBACb(VFLCallback):
 
 		# 计算重构损失
 		lEmbeds = sublist(v.lBtmOut, self.lRPs)
-		lRecons, vReconLoss = self.getRecon(lEmbeds, self.args.fValAlpha)
+		lRecons, vLoss1, vLoss2 = self.getRecon(lEmbeds, self.args.fValAlpha)
+		vReconLoss = vLoss1 + vLoss2
 		for i, idx in enumerate(self.lRPs):
 			v.lBtmOut[idx] = lRecons[i]
 
-		m.logDict({'loss/ReconVal': vReconLoss})
+		m.logDict({'loss/ReconVal': vReconLoss, 'loss/ReconVal1': vLoss1, 'loss/ReconVal2': vLoss2})
 
 	@override
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
@@ -434,49 +474,44 @@ class SGBACb(VFLCallback):
 
 	def logSur(self, m: BaseVFLArch, k: str, v: StepVars) -> None:
 		"""记录代理模型损失。"""
+		logk = f'Val{v.iLoaderIdx}_{k}'
+		# 获取真实模型的 Logits
+		tRealLogits = v.zTopOut
+		# 获取代理模型的 Logits
 		tSurIns = tc.cat(sublist(v.lTopIns, self.lAPs), dim=1)
-		tSurOut = self.zSurNet(tSurIns)
+		tSurLogits = self.zSurNet(tSurIns)
 
-		[acc1, acc3] = accuracy(tSurOut, v.labels, (1, 3))
-		loss = self.criSur(tSurOut, v.labels)
+		# 计算代理模型的保真度指标
+		rConsistency, fKLDiv = calcFidelity(tSurLogits, tRealLogits)
+		m.logDict({f'accGod/{logk}/Consistency': rConsistency, f'accGod/{logk}/KLDiv': fKLDiv})
 
-		name = f'Val{v.iLoaderIdx}_{k}'
-		m.logDict({f'lossSur/{name}': loss, f'accSur/{name}/Top1': acc1, f'accSur/{name}/Top3': acc3})
-
-		tTopPred = v.zTopOut.argmax(1)
-		[acc1, acc3] = accuracy(tSurOut, tTopPred, (1, 3))
-
-		name = f'Val{v.iLoaderIdx}_{k}'
-		m.logDict({f'accGod/{name}/Top1': acc1, f'accGod/{name}/Top3': acc3})
+		# 计算代理模型的预测正确率
+		loss = self.criSur(tSurLogits, v.labels)
+		[acc1, acc3] = accuracy(tSurLogits, v.labels, (1, 3))
+		m.logDict({f'lossSur/{logk}': loss, f'accSur/{logk}/Top1': acc1, f'accSur/{logk}/Top3': acc3})
 
 		# 获取非目标类样本的掩码
 		mask = v.labels != m.ns.iTgtLabel
 		if mask.any():
-			tTopOut = tSurOut[mask]
+			tTgtLogits = tSurLogits[mask]
+			tTgtLabels = tc.full_like(v.labels[mask], m.ns.iTgtLabel)
 
-			tLabels = v.labels[mask]
-			tTgtLabels = tc.full_like(tLabels, m.ns.iTgtLabel)
-
-			[acc1, acc3] = accuracy(tTopOut, tTgtLabels, (1, 3))
-			loss = m.criterion(tTopOut, tTgtLabels)
-
-			name = f'Val{v.iLoaderIdx}_{k}'
+			loss = m.criterion(tTgtLogits, tTgtLabels)
+			[acc1, acc3] = accuracy(tTgtLogits, tTgtLabels, (1, 3))
 			m.logDict(
-				{f'lossSurTgt/{name}': loss, f'accSurTgt/{name}/Top1': acc1, f'accSurTgt/{name}/Top3': acc3}
+				{f'lossSurTgt/{logk}': loss, f'accSurTgt/{logk}/Top1': acc1, f'accSurTgt/{logk}/Top3': acc3}
 			)
 
 	@staticmethod
 	def logSGBA(m: BaseVFLArch, k: str, v: StepVars) -> None:
 		"""记录 SGBA 损失。"""
+		logk = f'Val{v.iLoaderIdx}_{k}'
 		# 获取非目标类样本的掩码
 		mask = v.labels != m.ns.iTgtLabel
 		if mask.any():
-			tTopOut = v.zTopOut[mask]
-			tLabels = v.labels[mask]
-			tTgtLabels = tc.full_like(tLabels, m.ns.iTgtLabel)
+			tTgtLogits = v.zTopOut[mask]
+			tTgtLabels = tc.full_like(v.labels[mask], m.ns.iTgtLabel)
 
-			[acc1, acc3] = accuracy(tTopOut, tTgtLabels, (1, 3))
-			loss = m.criterion(tTopOut, tTgtLabels)
-
-			name = f'Val{v.iLoaderIdx}_{k}'
-			m.logDict({f'lossTgt/{name}': loss, f'accTgt/{name}/Top1': acc1, f'accTgt/{name}/Top3': acc3})
+			loss = m.criterion(tTgtLogits, tTgtLabels)
+			[acc1, acc3] = accuracy(tTgtLogits, tTgtLabels, (1, 3))
+			m.logDict({f'lossTgt/{logk}': loss, f'accTgt/{logk}/Top1': acc1, f'accTgt/{logk}/Top3': acc3})

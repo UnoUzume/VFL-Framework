@@ -26,8 +26,8 @@ def configOptims(m: BaseVFLArch, lr: float) -> OPT_TYPE:
 	optBtms = [AdamW(net.parameters(), lr=lr) for net in m.lBtmNets]
 	optTop = AdamW(m.zTopNet.parameters(), lr=lr)
 
-	lrsBtms = [createLRS(opt, milestones=args.milestones, gamma=args.gamma) for opt in optBtms]
-	lrsTop = createLRS(optTop, milestones=args.milestones, gamma=args.gamma)
+	lrsBtms = [createLRS(opt, milestones=[5, 10, 20, 30], gamma=0.4) for opt in optBtms]
+	lrsTop = createLRS(optTop, milestones=[5, 10, 20, 30], gamma=0.4)
 	return [*optBtms, optTop], [*lrsBtms, lrsTop]
 
 
@@ -39,7 +39,7 @@ def main(app: AppConfig, args: MethodArgs) -> None:
 		lCallbacks=[
 			InferCb(rSel=0.03),
 			SGBACb(args=args, config=app),
-			VFLIPCb(dpRoot=app.dpRoot, lPartyDims=app.model.lPartyDims, M=0.01, N=0.01),
+			VFLIPCb(dpRoot=app.dpRoot, lPartyDims=app.model.lPartyDims, M=0.03, N=0.02),
 		],
 	)
 
@@ -68,22 +68,14 @@ if __name__ == '__main__':
 		# 设置方法参数
 		args = MethodArgs(
 			fRecLr=2e-4,
-			fSurLr=2e-4,
 			fTrainAlpha=0.3,
-			fValAlpha=0.7,
-			lGradScales=(15.0, 5.0),
-			lLossScales=(2e-4, 2e-3),
-			milestones=[5, 50],
-			gamma=0.8,
-			lVicScales=(150, 150),  # 150
-			lVicEntropyScales=(300, 300),  # 150
-			lVicPartScales=(1000, 1000),  # 1000
-			fSurLambda1=1,
-			fSurLambda2=1e4,  # 1e6
+			fValAlpha=0.8,
+			lGradScales=(20.0, 5.0),
+			lLossScales=(1e-4, 2e-3),
 		)
 
 		# 设置实验参数
-		data = DataConfig(sName='imagenette', nBatchSize=256, nWorkers=8)
+		data = DataConfig(sName='cifar10', nBatchSize=1024, nWorkers=16)
 		model = ModelConfig(lPartyDims=[32] * 8, lTopDims=[256, 256, 10])
 		run = RunConfig(lr=1e-3, epochs=40, _configOptims=configOptims)
 		app = AppConfig(data, model, run, fpCkpt=None)

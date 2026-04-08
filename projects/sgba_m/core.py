@@ -3,15 +3,28 @@
 from dataclasses import dataclass
 from typing import override
 
-from torch.optim import AdamW, lr_scheduler as lrs
+from torch.optim import AdamW
 
 from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE, VFLCallback
 from models.fcn import FCN
-from projects.vfl.config import AppConfig
+from projects.vfl.config import AppConfig, createLRS
 from utils.common import F, copy, tc
 from utils.define import StepVars
 from utils.misc import accuracy, segment
+
+
+def sublist[T](lThis: list[T], lIndices: list[int]) -> list[T]:
+	"""根据索引列表提取原始列表中的元素。
+
+	Args:
+		lThis: 原始列表
+		lIndices: 索引列表，包含待提取元素的索引
+
+	Returns:
+		由指定索引元素构成的新列表
+	"""
+	return [lThis[i] for i in lIndices]
 
 
 def calcVecLoss(a: tc.Tensor, b: tc.Tensor, method: str = 'MSE') -> tc.Tensor:
@@ -87,10 +100,11 @@ class SGBACb(VFLCallback):
 		self.cfg = config
 		"""应用配置"""
 
-		self.iRP = 0
-		"""攻击节点的索引"""
+		self.lRPs = [1, 2, 5]
+		"""攻击节点的索引列表"""
 
-		nDim = self.cfg.model.lPartyDims[0]
+		lPartyDims = self.cfg.model.lPartyDims
+		nDim = sum(sublist(lPartyDims, self.lRPs))
 		self.zRecNet = FCN(lDims=[nDim, int(nDim * 0.8), int(nDim * 0.8), nDim], hasBN=False)  # ! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
@@ -101,28 +115,39 @@ class SGBACb(VFLCallback):
 	@override
 	def onConfigOptims(self) -> OPT_TYPE:
 		optRec = AdamW(self.zRecNet.parameters(), lr=self.args.fRecLr)
-		lrsRec = lrs.LinearLR(optRec, start_factor=0.1, total_iters=5)
+		lrsRec = createLRS(optRec, milestones=[5, 10, 20], gamma=0.8)
 		return [optRec], [lrsRec]
 
-	def getRecon(self, tEmbed: tc.Tensor, alpha: float = 1.0) -> tuple[tc.Tensor, tc.Tensor]:
-		"""根据输入嵌入生成重构输出。
+	def getRecon(
+		self, lEmbeds: list[tc.Tensor], alpha: float = 1.0
+	) -> tuple[list[tc.Tensor], tc.Tensor]:
+		"""生成重构嵌入。
 
 		Args:
-			tEmbed: 输入嵌入
-			alpha: 重构输出的混合比例，默认为 `1.0`
+			lEmbeds: 原始嵌入列表，每个元素为一个节点的原始嵌入
+			alpha: 生成样本的混合比例，默认为 `1.0`
 
 		Returns:
-			重构输出
-			重构损失值
+			重构嵌入列表，每个元素为一个节点的重构嵌入；
+			重构损失值，为所有节点重构损失的总和。
 		"""
-		# 生成重构输出
-		tRecOut = self.zRecNet(tEmbed)
-		# 混合重构输出
-		tRecon = alpha * tRecOut + (1 - alpha) * tEmbed
-		# 计算重构损失
-		vLoss = calcVecLoss(tRecOut, tEmbed, 'Huber/N')
+		# 将嵌入拼接，并记录拼接前的维度
+		tEmbed = tc.cat(lEmbeds, dim=1)
+		lDims = [t.size(dim=1) for t in lEmbeds]
 
-		return tRecon, vLoss
+		# 生成重构输出，并切分回原维度
+		tRecOut = self.zRecNet(tEmbed)
+		lRecOut = list(tc.split(tRecOut, lDims, dim=1))
+
+		# 混合重构输出，并切分回原维度
+		tRecon = alpha * tRecOut + (1 - alpha) * tEmbed
+		lRecons = list(tc.split(tRecon, lDims, dim=1))
+
+		# 针对每个节点计算重构损失
+		lLoss = [calcVecLoss(a, b, 'Huber/N') for a, b in zip(lRecOut, lEmbeds, strict=True)]
+		vLoss = tc.mean(tc.stack(lLoss))
+
+		return lRecons, vLoss
 
 	# ============
 	# 训练阶段
@@ -153,21 +178,8 @@ class SGBACb(VFLCallback):
 			# tSelect = tc.randperm(tVicPos.size(dim=0), device=m.device)[: tDstPos.size(dim=0)]
 
 			# 批量样本切换
-			v.lBtmIns[0][tDstPos] = v.lBtmIns[0][tVicPos[tSelect]]
-
-		# 整个训练集样本切换
-		# if len(aDstPos) > 0:  # 如果找到投毒目标
-		# 	# 寻找投毒目标对应的 self.aDstIdxs 的元素位置，同时作为 self.aSrcIdxs 的元素位置
-		# 	aSrcIdxs_Pos = _aDstIdxs_Pos = np.where(aBatchIdxs[aDstPos, None] == m.ns.aDstIdxs)[1]
-		# 	# 获取投毒来源的元素
-		# 	aSrcIdxsSubset = m.ns.aSrcIdxs[aSrcIdxs_Pos]
-
-		# 	for pos, src_idx in zip(self.aDstPos, aSrcIdxsSubset, strict=True):
-		# 		image = m.module.dsTrain[src_idx.item()][0]  # pyright: ignore[reportAttributeAccessIssue]
-
-		# 		parts = m.module.fnSplit(image.unsqueeze(0), m.module.nParty)
-		# 		parts = [m.module.tfCurrent(part) for part in parts]
-		# 		v.lBtmIns[0][pos] = parts[0]
+			for idx in self.lRPs:
+				v.lBtmIns[idx][tDstPos] = v.lBtmIns[idx][tVicPos[tSelect]]
 
 	@override
 	def onTrainBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -176,20 +188,21 @@ class SGBACb(VFLCallback):
 
 	def poison(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""执行生成式投毒。"""
-		# ! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
-		tEmbed = v.lBtmOut[0]
-		_, self.vReconLoss = self.getRecon(tEmbed)
+		# ! 不使用 detach()，让底层模型也更新，降低生成网络的训练难度
+		lEmbeds = sublist(v.lBtmOut, self.lRPs)
+		_, self.vReconLoss = self.getRecon(lEmbeds)
 		m.logDict({'loss/ReconTrain': self.vReconLoss})
 
-		# # 投毒操作
-		v.lBtmOut[0] = v.lBtmOut[0].clone()  # 避免 In-place 操作错误
+		for idx in self.lRPs:
+			v.lBtmOut[idx] = v.lBtmOut[idx].clone()  # 避免 In-place 操作错误
 
 		# # 向目标类投毒（目的样本特征改成来源样本特征，建立目标类与来源样本的联系）
 		if self.tDstMask.any():
 			# ! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			tEmbed = v.lBtmOut[0][self.tDstMask].detach()
-			tRecon, _ = self.getRecon(tEmbed, self.args.fTrainAlpha)
-			v.lBtmOut[0][self.tDstMask] = tRecon
+			lSubEmbeds = [t[self.tDstMask].detach() for t in sublist(v.lBtmOut, self.lRPs)]
+			lSubRecons, _ = self.getRecon(lSubEmbeds, self.args.fTrainAlpha)
+			for i, idx in enumerate(self.lRPs):
+				v.lBtmOut[idx][self.tDstMask] = lSubRecons[i]
 
 	@override
 	def onTrainLoss(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -212,7 +225,8 @@ class SGBACb(VFLCallback):
 		value = segment(m.current_epoch, ins=(10, 30), out=self.args.lGradScales)
 		m.logDict({'value/GradScale': value})
 		if self.tDstMask.any():
-			v.lTopInsGrad[0][self.tDstMask] *= value
+			for idx in self.lRPs:
+				v.lTopInsGrad[idx][self.tDstMask] *= value
 
 	@override
 	def onTrainOptimStep(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -232,9 +246,10 @@ class SGBACb(VFLCallback):
 		v = d['Attack']
 
 		# 计算重构损失
-		tEmbed = v.lBtmOut[0]
-		tRecon, vReconLoss = self.getRecon(tEmbed, self.args.fValAlpha)
-		v.lBtmOut[0] = tRecon
+		lEmbeds = sublist(v.lBtmOut, self.lRPs)
+		lRecons, vReconLoss = self.getRecon(lEmbeds, self.args.fValAlpha)
+		for i, idx in enumerate(self.lRPs):
+			v.lBtmOut[idx] = lRecons[i]
 
 		m.logDict({'loss/ReconVal': vReconLoss})
 
@@ -246,11 +261,11 @@ class SGBACb(VFLCallback):
 			m.logDict({f'entropy/Val{k}': entropy})
 
 			if m.current_epoch > 0:
-				self.logVal(m, k, v)
+				self.logSGBA(m, k, v)
 
 	@staticmethod
-	def logVal(m: BaseVFLArch, k: str, v: StepVars) -> None:
-		"""记录验证阶段的损失。"""
+	def logSGBA(m: BaseVFLArch, k: str, v: StepVars) -> None:
+		"""记录 SGBA 损失。"""
 		logk = f'Val{v.iLoaderIdx}_{k}'
 		# 获取非目标类样本的掩码
 		mask = v.labels != m.ns.iTgtLabel

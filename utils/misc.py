@@ -124,13 +124,13 @@ class LoaderParams(TypedDict):
 	"""是否在数据集迭代结束后保持工作进程活跃"""
 
 
-def accuracy(pred: tc.Tensor, target: tc.Tensor, topk: Sequence[int] = (1,)) -> list[float]:
+def accuracy(lprobs: tc.Tensor, target: tc.Tensor, topk: Sequence[int] = (1,)) -> list[float]:
 	"""计算分类准确率。
 
 	计算模型预测结果在指定 top-k 值下的准确率。
 
 	Args:
-		pred: 模型预测的 logits 或概率值，形状为 `(nBatchSize, nClass)`
+		lprobs: 模型预测的 logits 或概率值，形状为 `(nBatchSize, nClass)`
 		target: 真实标签，形状为 `(nBatchSize,)`
 		topk: 要计算的 top-k 值列表，默认为 `(1,)`
 
@@ -140,9 +140,9 @@ def accuracy(pred: tc.Tensor, target: tc.Tensor, topk: Sequence[int] = (1,)) -> 
 	maxk = max(topk)
 	nBatchSize = target.size(0)
 
-	_, pred = pred.topk(maxk, 1, True, True)
-	pred = pred.t()
-	correct = pred.eq(target.reshape(1, -1).expand_as(pred))
+	_, lprobs = lprobs.topk(maxk, 1, True, True)
+	lprobs = lprobs.t()
+	correct = lprobs.eq(target.reshape(1, -1).expand_as(lprobs))
 
 	res = []
 	for k in topk:

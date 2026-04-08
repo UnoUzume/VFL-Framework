@@ -114,9 +114,9 @@ class LFBAInferCb(VFLCallback):
 		# m.ns.tDstIds = m.ns.tTgtIds[indices]
 
 		# # 选择一批非目标类样本
-		# aOtherIdxs = np.setdiff1d(aIdxs, m.ns.aTgtIdxs, True)
-		# m.ns.aSrcIdxs = rng().choice(aOtherIdxs, nSel, False)
-		# m.ns.aSrcIdxs = rng().choice(m.ns.aVicIdxs, nSel, False)
+		# aOtherIds = np.setdiff1d(aIds, m.ns.aTgtIds, True)
+		# m.ns.aSrcIds = rng().choice(aOtherIds, nSel, False)
+		# m.ns.aSrcIds = rng().choice(m.ns.aVicIds, nSel, False)
 
 	def infer(self, m: BaseVFLArch, data: dict[str, tc.Tensor]) -> None:
 		"""推理当前批次中的目标类和非目标类样本。
@@ -129,7 +129,7 @@ class LFBAInferCb(VFLCallback):
 			data: 当前批次的数据字典，包含以下键：
 				- `'grads'`: 样本梯度张量
 				- `'labels'`: 样本标签张量
-				- `'idxs'`: 样本索引张量
+				- `'ids'`: 样本索引张量
 		"""
 		# 获取当前批次中的锚样本位置
 		[lAnchorPos] = tc.nonzero(data['ids'] == m.ns.iAncId, as_tuple=True)
@@ -229,10 +229,10 @@ class InferCb(VFLCallback):
 		tMask = tc.isin(data['ids'], m.ns.tTgtIds)  #: 目标类样本的掩码
 		tGradsL2 = tc.norm(data['grads'][tMask], p=2, dim=1)  #: 目标类样本的梯度 L2 范数
 		_, tIndices = tc.topk(tGradsL2, k=nSel)
-		m.ns.tDstIdxs = data['ids'][tMask][tIndices]
+		m.ns.tDstIds = data['ids'][tMask][tIndices]
 
 		# 方案二：随机选择
-		# m.ns.tDstIdxs = rng().choice(m.ns.tTgtIds, size=nSel, replace=False)
+		# m.ns.tDstIds = rng().choice(m.ns.tTgtIds, size=nSel, replace=False)
 
 	def infer(self, m: BaseVFLArch, data: dict[str, tc.Tensor]) -> None:
 		"""进行标签推理，并存储到实例命名空间中。
