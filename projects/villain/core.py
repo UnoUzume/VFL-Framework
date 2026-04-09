@@ -25,7 +25,7 @@ def createEps(embeds: tc.Tensor, beta: float = 0.4, isAugment: bool = False) -> 
 		生成的触发器向量，形状与输入嵌入特征相同
 	"""
 	embed_std = tc.std(embeds, dim=0)
-	_, top_indices = tc.topk(embed_std, k=64)
+	_, top_indices = tc.topk(embed_std, k=embeds.size(dim=1) // 2)
 	# m_elements_indices = torch.argsort(embed_std, descending=True)
 
 	# if isAugment:  # * Backdoor Augmentation: Dropout
@@ -64,10 +64,6 @@ class VillainCb(VFLCallback):
 		self.iRP = 0
 		"""攻击节点的索引"""
 
-	@override
-	def onInitModule(self, m: BaseVFLArch) -> None:
-		m.logText.info(f'{self.__class__.__name__}.onInitModule()')
-
 	# ============
 	# 训练阶段
 	# ============
@@ -92,12 +88,12 @@ class VillainCb(VFLCallback):
 			[tVicPos] = tc.nonzero(self.tVicMask, as_tuple=True)
 
 			# 方案一：有放回抽取
-			tSelect = tc.randint(high=len(tVicPos), size=(len(tVicPos),), device=m.device)
+			tSelect = tc.randint(high=len(tVicPos), size=(len(tDstPos),), device=m.device)
 			# 方案二：无放回抽取，但是来源样本可能少于目的样本
-			# tSelect = tc.randperm(len(tVicPos), device=m.device)[: len(tVicPos)]
+			# tSelect = tc.randperm(len(tVicPos), device=m.device)[: len(tDstPos)]
 
 			# 批量样本切换
-			v.lBtmIns[0][tDstPos] = v.lBtmIns[0][tVicPos[tSelect]]
+			v.lBtmIns[self.iRP][tDstPos] = v.lBtmIns[self.iRP][tVicPos[tSelect]]
 
 	@override
 	def onTrainBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -107,7 +103,8 @@ class VillainCb(VFLCallback):
 	def poison(self, v: StepVars) -> None:
 		"""执行投毒。"""
 		if self.tDstMask.any():
-			v.lBtmOut[0][self.tDstMask] += createEps(v.lBtmOut[0].detach(), 1, True)
+			eps = createEps(embeds=v.lBtmOut[self.iRP].detach(), beta=1, isAugment=True)
+			v.lBtmOut[self.iRP][self.tDstMask] += eps
 
 	# ============
 	# 验证阶段
@@ -120,7 +117,7 @@ class VillainCb(VFLCallback):
 	@override
 	def onValBtmOut(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		v = d['Attack']
-		v.lBtmOut[0] += createEps(v.lBtmOut[0].detach(), 2)
+		v.lBtmOut[self.iRP] += createEps(embeds=v.lBtmOut[self.iRP].detach(), beta=2)
 
 	@override
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
@@ -138,5 +135,5 @@ class VillainCb(VFLCallback):
 			tTgtLabels = tc.full_like(v.labels[mask], m.ns.iTgtLabel)
 
 			loss = m.criterion(tTgtLogits, tTgtLabels)
-			[acc1, acc3] = accuracy(tTgtLogits, tTgtLabels, (1, 3))
+			[acc1, acc3] = accuracy(lprobs=tTgtLogits, target=tTgtLabels, topk=(1, 3))
 			m.logDict({f'lossTgt/{logk}': loss, f'accTgt/{logk}/Top1': acc1, f'accTgt/{logk}/Top3': acc3})

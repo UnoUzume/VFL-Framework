@@ -6,7 +6,7 @@ from torch.optim import AdamW
 
 from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE
-from projects.lfba.infer import InferCb
+from projects.lfba.infer import LFBAInferAllCb
 from projects.vfl.config import AppConfig, ModelConfig, RunConfig, createLRS
 from projects.vfl.core import VFLArch
 from projects.vflip.method import VFLIPCb
@@ -37,7 +37,7 @@ def main(app: AppConfig, args: MethodArgs) -> None:
 	arch = VFLArch(
 		config=app,
 		lCallbacks=[
-			InferCb(rSel=0.03),
+			LFBAInferAllCb(rSel=0.03),
 			SGBACb(args=args, config=app),
 			VFLIPCb(dpRoot=app.dpRoot, lPartyDims=app.model.lPartyDims, M=0.03, N=0.02),
 		],

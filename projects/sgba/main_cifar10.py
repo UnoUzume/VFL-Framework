@@ -39,7 +39,7 @@ def main(app: AppConfig, args: MethodArgs) -> None:
 		lCallbacks=[
 			LFBAInferCb(iAncIdx=1096, rTgt=0.08, rVic=0.70, rSel=0.03),
 			SGBACb(args=args, config=app),
-			VFLIPCb(dpRoot=app.dpRoot, lPartyDims=app.model.lPartyDims, M=0.03, N=0.02),
+			VFLIPCb(dpRoot=app.dpRoot, lPartyDims=app.model.lPartyDims, M=0.01, N=0.01),
 		],
 	)
 

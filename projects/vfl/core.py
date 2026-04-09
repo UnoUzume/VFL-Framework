@@ -48,7 +48,9 @@ class VFLArch(BaseVFLArch):
 
 	@override
 	def onTrainStepVars(self, m: BaseVFLArch, v: StepVars) -> None:
-		[v.images, v.labels, v.indices] = v.batch
+		v.images = v.batch.data
+		v.labels = v.batch.label
+		v.indices = v.batch.idx
 
 	@override
 	def onTrainLoss(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -61,7 +63,9 @@ class VFLArch(BaseVFLArch):
 	@override
 	def onValStepVars(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		for v in d.values():  # * Origin
-			[v.images, v.labels, v.indices] = v.batch
+			v.images = v.batch.data
+			v.labels = v.batch.label
+			v.indices = v.batch.idx
 
 	@override
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:

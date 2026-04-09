@@ -173,9 +173,9 @@ class SGBACb(VFLCallback):
 			[tVicPos] = tc.nonzero(self.tVicMask, as_tuple=True)
 
 			# 方案一：有放回抽取
-			tSelect = tc.randint(high=tVicPos.size(dim=0), size=(tDstPos.size(dim=0),), device=m.device)
+			tSelect = tc.randint(high=len(tVicPos), size=(len(tDstPos),), device=m.device)
 			# 方案二：无放回抽取，但是来源样本可能少于目的样本
-			# tSelect = tc.randperm(tVicPos.size(dim=0), device=m.device)[: tDstPos.size(dim=0)]
+			# tSelect = tc.randperm(len(tVicPos), device=m.device)[: len(tDstPos)]
 
 			# 批量样本切换
 			for idx in self.lRPs:

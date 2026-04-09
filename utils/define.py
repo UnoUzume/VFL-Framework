@@ -5,99 +5,164 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from typing import Any
 
 from beartype import beartype as typechecker
 from jaxtyping import Float32, Int64, UInt8
 
 from .common import np, tc
 
-NUImage = UInt8[np.ndarray, '_h _w 3']
-"""NumPy 格式的图像数据，形状为 `(height, width, 3)`，数据类型为 `uint8`。"""
+# ==========================================
+# 1. 基础类型别名 (使用 Python 3.12 'type' 语法)
+# ==========================================
 
-TUImage = UInt8[tc.Tensor, '3 _h _w']
-"""PyTorch 格式的图像数据，形状为 `(3, height, width)`，数据类型为 `uint8`。"""
+# --- 图像类 ---
+type NUImage = UInt8[np.ndarray, '_h _w _c']
+"""NumPy 格式的图像数据，形状为 `(height, width, channel)`，数据类型为 `uint8`。"""
+type TUImage = UInt8[tc.Tensor, '_c _h _w']
+"""PyTorch 格式的图像数据，形状为 `(channel, height, width)`，数据类型为 `uint8`。"""
+type TFImage = Float32[tc.Tensor, '_c _h _w']
+"""PyTorch 格式的图像数据，形状为 `(channel, height, width)`，数据类型为 `float32`。"""
+type TUImages = UInt8[TUImage, ' b']
+"""PyTorch 格式的批量图像数据，形状为 `(batch, channel, height, width)`，数据类型为 `uint8`。"""
+type TFImages = Float32[TFImage, ' b']
+"""PyTorch 格式的批量图像数据，形状为 `(batch, channel, height, width)`，数据类型为 `float32`。"""
 
-TFImage = Float32[tc.Tensor, '3 _h _w']
-"""PyTorch 格式的图像数据，形状为 `(3, height, width)`，数据类型为 `float32`。"""
+# --- 特征类 ---
+type NFeature = Float32[np.ndarray, ' dim']
+"""NumPy 格式的 1D 特征向量，形状为 `(dim,)`。"""
+type TFeature = Float32[tc.Tensor, ' dim']
+"""PyTorch 格式的 1D 特征向量，形状为 `(dim,)`。"""
+type TFeatures = Float32[TFeature, ' b']
+"""PyTorch 格式的 1D 特征批次，形状为 `(batch, dim)`。"""
 
-TUImages = UInt8[TUImage, 'b']
-"""PyTorch 格式的批量图像数据，形状为 `(batch, 3, height, width)`，数据类型为 `uint8`。"""
 
-TFImages = Float32[TFImage, 'b']
-"""PyTorch 格式的批量图像数据，形状为 `(batch, 3, height, width)`，数据类型为 `float32`。"""
+# ==========================================
+# 2. 泛型数据结构 (使用 Python 3.12 泛型语法)
+# ==========================================
 
 
 @typechecker
-class TUImageSample(NamedTuple):
-	"""未处理的 PyTorch 图像样本。"""
+@dataclass(slots=True)
+class BaseSample[T]:
+	"""通用的样本基类"""
 
-	image: TUImage
-	"""图像数据"""
+	data: T
+	"""样本数据"""
 	label: int
-	"""图像标签"""
+	"""样本标签"""
 	idx: int
-	"""图像索引"""
+	"""样本索引"""
 
 
 @typechecker
-class TFImageSample(NamedTuple):
-	"""已处理的 PyTorch 图像样本。"""
+@dataclass(slots=True)
+class BaseBatch[T]:
+	"""通用的批次基类"""
 
-	image: TFImage
-	"""图像数据"""
-	label: int
-	"""图像标签"""
-	idx: int
-	"""图像索引"""
-
-
-@typechecker
-class TFSplitImageSample(NamedTuple):
-	"""已分割、已处理的 PyTorch 图像样本。"""
-
-	image: list[TFImage]
-	"""分割后的图像数据列表"""
-	label: int
-	"""图像标签"""
-	idx: int
-	"""图像索引"""
-
-
-@typechecker
-class TUImageBatch(NamedTuple):
-	"""未处理的 PyTorch 图像批次。"""
-
-	image: TUImages
-	"""图像数据批次"""
+	data: T
+	"""批次数据"""
 	label: Int64[tc.Tensor, ' b']
-	"""图像标签批次"""
+	"""批次标签，形状 `(batch,)`"""
 	idx: Int64[tc.Tensor, ' b']
-	"""图像索引批次"""
+	"""批次索引，形状 `(batch,)`"""
+
+
+# ==========================================
+# 3. 具体业务别名 (保持向后兼容，方便上层业务调用)
+# ==========================================
+
+
+# --- 图像场景 ---
+@typechecker
+class TUImageSample(BaseSample[TUImage]):
+	"""未处理的 PyTorch 图像单样本数据类。
+
+	继承自泛型 `BaseSample`，其核心 `data` 属性被严格约束为 `TUImage`
+	（即形状为 `(c, h, w)`，数据类型为 `uint8` 的张量）。
+	通常用于 Dataset 的初始加载阶段，在应用 Transform 之前。
+	"""
 
 
 @typechecker
-class TFImageBatch(NamedTuple):
-	"""已处理的 PyTorch 图像批次。"""
+class TFImageSample(BaseSample[TFImage]):
+	"""已处理的 PyTorch 图像单样本数据类。
 
-	image: TFImages
-	"""图像数据批次"""
-	label: Int64[tc.Tensor, ' b']
-	"""图像标签批次"""
-	idx: Int64[tc.Tensor, ' b']
-	"""图像索引批次"""
+	继承自泛型 `BaseSample`，其核心 `data` 属性被严格约束为 `TFImage`
+	（即形状为 `(c, h, w)`，数据类型为 `float32` 的张量）。
+	通常表示已经过归一化等 Transform 增强管线，可以直接喂给神经网络的图像样本。
+	"""
 
 
 @typechecker
-class TSplitImageBatch(NamedTuple):
-	"""已分割、已处理的 PyTorch 图像批次。"""
+class TFSplitImageSample(BaseSample[list[TFImage]]):
+	"""已分割且已处理的 PyTorch 图像单样本数据类（面向联邦学习）。
 
-	image: list[TUImages | TFImages]
-	"""分割后的图像数据批次列表"""
-	label: Int64[tc.Tensor, ' b']
-	"""图像标签批次"""
-	idx: Int64[tc.Tensor, ' b']
-	"""图像索引批次"""
+	继承自泛型 `BaseSample`，其核心 `data` 属性被严格约束为 `list[TFImage]`
+	（即包含多个 `float32` 张量的列表）。
+	代表一张原始图像被切割（如空间划分或通道划分）后，分属于不同参与方的数据片段集。
+	"""
+
+
+@typechecker
+class TUImageBatch(BaseBatch[TUImages]):
+	"""未处理的 PyTorch 图像批次数据类。
+
+	继承自泛型 `BaseBatch`，其核心 `data` 属性被严格约束为 `TUImages`
+	（即形状为 `(b, c, h, w)`，数据类型为 `uint8` 的张量批次）。
+	通常存在于 DataLoader 刚完成 collate，但尚未应用 GPU Transform 的转移阶段。
+	"""
+
+
+@typechecker
+class TFImageBatch(BaseBatch[TFImages]):
+	"""已处理的 PyTorch 图像批次数据类。
+
+	继承自泛型 `BaseBatch`，其核心 `data` 属性被严格约束为 `TFImages`
+	（即形状为 `(b, c, h, w)`，数据类型为 `float32` 的张量批次）。
+	这是标准的深度学习输入批次，代表已经完全准备好进行网络前向传播的数据。
+	"""
+
+
+@typechecker
+class TSplitImageBatch(BaseBatch[list[TUImages | TFImages]]):
+	"""已分割的 PyTorch 图像批次数据类（面向联邦学习）。
+
+	继承自泛型 `BaseBatch`，其核心 `data` 属性被约束为 `list[TUImages | TFImages]`
+	（即包含多个图像批次张量的列表）。
+	代表在 Batch 级别完成切分后的多方共享数据，列表的长度通常等于联邦参与方的数量 (nParty)。
+	"""
+
+
+# --- 特征场景 ---
+@typechecker
+class TFeatureSample(BaseSample[TFeature]):
+	"""一维特征单样本数据类。
+
+	继承自泛型 `BaseSample`，其核心 `data` 属性被严格约束为 `TFeature`
+	（即形状为 `(dim,)` 的 1D 浮点张量）。
+	适用于处理表格数据、NLP 句向量或类似 NUS-WIDE 的多模态拼接特征。
+	"""
+
+
+@typechecker
+class TFeatureBatch(BaseBatch[TFeatures]):
+	"""一维特征批次数据类。
+
+	继承自泛型 `BaseBatch`，其核心 `data` 属性被严格约束为 `TFeatures`
+	（即形状为 `(b, dim)` 的 2D 浮点张量）。
+	这是输入给全连接层 (MLP) 或特征交互网络的基础批次格式。
+	"""
+
+
+@typechecker
+class TSplitFeatureBatch(BaseBatch[list[TFeatures]]):
+	"""已分割的一维特征批次数据类（面向垂直联邦学习 VFL）。
+
+	继承自泛型 `BaseBatch`，其核心 `data` 属性被约束为 `list[TFeatures]`
+	（即包含多个 2D 特征批次张量的列表）。
+	代表全局特征在维度 (Dimension) 上被切分给各个参与方，各方持有相同样本的不同特征子集。
+	"""
 
 
 def defaultTensor() -> tc.Tensor:

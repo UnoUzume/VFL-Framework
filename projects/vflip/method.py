@@ -319,12 +319,12 @@ class VFLIP:
 		"""计算最终的异常检测阈值。
 
 		将所有收集到的分数合并，然后为每个参与方计算异常检测阈值，
-		阈值计算公式为：`均值 + 3 * 标准差`，用于识别异常嵌入。
+		阈值计算公式为：`均值 + 标准差`，用于识别异常嵌入。
 		"""
 		# 将所有批次的分数合并为一个张量
 		tScores = tc.cat(self.lAllScores, dim=0)  # * [nTrainSize, nDstParty]
-		# 计算每个参与方的异常检测阈值（均值 + 3 倍标准差）
-		self.tThres = tc.mean(tScores, dim=0) + 3 * tc.std(tScores, dim=0)  # * [nDstParty]
+		# 计算每个参与方的异常检测阈值（均值 + 标准差）
+		self.tThres = tc.mean(tScores, dim=0) + tc.std(tScores, dim=0)  # * [nDstParty]
 
 	# ============
 	# 识别与净化

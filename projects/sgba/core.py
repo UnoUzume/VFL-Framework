@@ -90,7 +90,7 @@ class SGBACb(VFLCallback):
 		self.iRP = 0
 		"""攻击节点的索引"""
 
-		nDim = self.cfg.model.lPartyDims[0]
+		nDim = self.cfg.model.lPartyDims[self.iRP]
 		self.zRecNet = FCN(lDims=[nDim, int(nDim * 0.8), int(nDim * 0.8), nDim], hasBN=False)  # ! 可变
 		"""攻击者用于生成后门触发器的网络"""
 
@@ -148,12 +148,12 @@ class SGBACb(VFLCallback):
 			[tVicPos] = tc.nonzero(self.tVicMask, as_tuple=True)
 
 			# 方案一：有放回抽取
-			tSelect = tc.randint(high=tVicPos.size(dim=0), size=(tDstPos.size(dim=0),), device=m.device)
+			tSelect = tc.randint(high=len(tVicPos), size=(len(tDstPos),), device=m.device)
 			# 方案二：无放回抽取，但是来源样本可能少于目的样本
-			# tSelect = tc.randperm(tVicPos.size(dim=0), device=m.device)[: tDstPos.size(dim=0)]
+			# tSelect = tc.randperm(len(tVicPos), device=m.device)[: len(tDstPos)]
 
 			# 批量样本切换
-			v.lBtmIns[0][tDstPos] = v.lBtmIns[0][tVicPos[tSelect]]
+			v.lBtmIns[self.iRP][tDstPos] = v.lBtmIns[self.iRP][tVicPos[tSelect]]
 
 		# 整个训练集样本切换
 		# if len(aDstPos) > 0:  # 如果找到投毒目标
@@ -177,19 +177,19 @@ class SGBACb(VFLCallback):
 	def poison(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""执行生成式投毒。"""
 		# ! 不使用 detach()，让底层模型也更新，降低触发器生成网络的训练难度
-		tEmbed = v.lBtmOut[0]
+		tEmbed = v.lBtmOut[self.iRP]
 		_, self.vReconLoss = self.getRecon(tEmbed)
 		m.logDict({'loss/ReconTrain': self.vReconLoss})
 
 		# # 投毒操作
-		v.lBtmOut[0] = v.lBtmOut[0].clone()  # 避免 In-place 操作错误
+		v.lBtmOut[self.iRP] = v.lBtmOut[self.iRP].clone()  # 避免 In-place 操作错误
 
 		# # 向目标类投毒（目的样本特征改成来源样本特征，建立目标类与来源样本的联系）
 		if self.tDstMask.any():
 			# ! 使用 detach() 避免投毒样本的梯度传播至底层模型，产生意外影响
-			tEmbed = v.lBtmOut[0][self.tDstMask].detach()
+			tEmbed = v.lBtmOut[self.iRP][self.tDstMask].detach()
 			tRecon, _ = self.getRecon(tEmbed, self.args.fTrainAlpha)
-			v.lBtmOut[0][self.tDstMask] = tRecon
+			v.lBtmOut[self.iRP][self.tDstMask] = tRecon
 
 	@override
 	def onTrainLoss(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -212,7 +212,7 @@ class SGBACb(VFLCallback):
 		value = segment(m.current_epoch, ins=(10, 30), out=self.args.lGradScales)
 		m.logDict({'value/GradScale': value})
 		if self.tDstMask.any():
-			v.lTopInsGrad[0][self.tDstMask] *= value
+			v.lTopInsGrad[self.iRP][self.tDstMask] *= value
 
 	@override
 	def onTrainOptimStep(self, m: BaseVFLArch, v: StepVars) -> None:
@@ -232,9 +232,9 @@ class SGBACb(VFLCallback):
 		v = d['Attack']
 
 		# 计算重构损失
-		tEmbed = v.lBtmOut[0]
+		tEmbed = v.lBtmOut[self.iRP]
 		tRecon, vReconLoss = self.getRecon(tEmbed, self.args.fValAlpha)
-		v.lBtmOut[0] = tRecon
+		v.lBtmOut[self.iRP] = tRecon
 
 		m.logDict({'loss/ReconVal': vReconLoss})
 
@@ -259,5 +259,5 @@ class SGBACb(VFLCallback):
 			tTgtLabels = tc.full_like(v.labels[mask], m.ns.iTgtLabel)
 
 			loss = m.criterion(tTgtLogits, tTgtLabels)
-			[acc1, acc3] = accuracy(tTgtLogits, tTgtLabels, (1, 3))
+			[acc1, acc3] = accuracy(lprobs=tTgtLogits, target=tTgtLabels, topk=(1, 3))
 			m.logDict({f'lossTgt/{logk}': loss, f'accTgt/{logk}/Top1': acc1, f'accTgt/{logk}/Top3': acc3})

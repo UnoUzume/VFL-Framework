@@ -5,23 +5,24 @@
 """
 
 from collections.abc import Callable
-from typing import override
+from typing import Any, override
 
 from beartype import beartype as typechecker
 from jaxtyping import jaxtyped
 from torchvision.datasets import CIFAR10
 
 from utils import define as de
-from utils.common import F, Path, np
-from utils.data import Dataset, TypedDataLoader, collate
+from utils.common import F, Path, np, tc
+from utils.data import BaseDataset, create_collate
 from utils.module import DataHandler
 from utils.vision import Transform, tf
 
 
-class BaseDataset(Dataset[de.TUImageSample]):
-	"""CIFAR-10 数据集的基本加载类。
+class CIFAR10Dataset(BaseDataset[de.TUImageSample]):
+	"""CIFAR-10 数据集类。
 
-	继承自 `Dataset` 类，用于加载和预处理 CIFAR-10 数据集。
+	继承自泛型的 `BaseDataset`，在初始化时一次性将数据挂载为 Tensor，
+	消除 DataLoader 运行时的重复格式转换开销。
 	"""
 
 	def __init__(self, dpRoot: Path | str, isTrain: bool) -> None:
@@ -31,34 +32,29 @@ class BaseDataset(Dataset[de.TUImageSample]):
 				dpRoot: 数据集存储路径
 				isTrain: 是否为训练集
 		"""
-		dataset = CIFAR10(dpRoot, isTrain)
-		self.images = np.array(dataset.data)
-		"""NumPy 格式的图像数据数组"""
-		self.labels = np.array(dataset.targets)
-		"""NumPy 格式的标签数组"""
-		self.transform = tf.ToImage()
-		"""图像变换函数，用于将 NumPy 图像转换为 PyTorch 张量"""
+		super().__init__()
+		dataset = CIFAR10(dpRoot, train=isTrain)
 
-	def __getitem__(self, idx: int) -> de.TUImageSample:
-		"""获取指定索引的图像样本。
+		# CIFAR10 原生数据形状为 (N, H, W, C)，需转置为 PyTorch 规范的 (N, C, H, W)
+		images = np.array(dataset.data).transpose((0, 3, 1, 2))
+
+		# 满足 BaseDataset 契约：强行转换为 tc.Tensor 并挂载
+		self.data = tc.from_numpy(images)
+		self.labels = tc.tensor(dataset.targets, dtype=tc.int64)
+
+	@override
+	def make_sample(self, data: tc.Tensor, label: int, idx: int) -> de.TUImageSample:
+		"""组装强类型的图像样本实例。
 
 		Args:
-				idx: 样本索引
+				data: 单个核心图像数据 (tc.Tensor, 格式为 uint8)。
+				label: 数据标签。
+				idx: 样本索引。
 
 		Returns:
-				包含图像、标签和索引的样本对象
+				符合 TUImageSample 定义的强类型样本。
 		"""
-		image = self.transform(self.images[idx])
-		label = self.labels[idx].item()
-		return de.TUImageSample(image, label, idx)
-
-	def __len__(self) -> int:
-		"""获取数据集的样本数量。
-
-		Returns:
-				数据集的样本数量
-		"""
-		return len(self.images)
+		return de.TUImageSample(data=data, label=label, idx=idx)
 
 
 @jaxtyped(typechecker=typechecker)
@@ -131,10 +127,10 @@ def getAugmentTrans(nParty: int = 1) -> list[Transform]:
 	]
 
 
-class Handler(DataHandler):
-	"""CIFAR-10 数据集的处理程序类。
+class Handler(DataHandler[de.TUImageSample]):
+	"""CIFAR-10 数据集的核心处理程序。
 
-	继承自 `DataHandler` 类，提供了 CIFAR-10 数据集的准备、加载和变换功能。
+	实现 `DataHandler` 协议，提供 CIFAR-10 数据集的路径、构造器及组装函数的实例。
 	"""
 
 	@property
@@ -144,19 +140,23 @@ class Handler(DataHandler):
 
 	@override
 	def prepare(self, dpData: Path) -> None:
-		CIFAR10(dpData, True, download=True)
-		CIFAR10(dpData, False, download=True)
+		CIFAR10(dpData, train=True, download=True)
+		CIFAR10(dpData, train=False, download=True)
 
 	@override
-	def getTrainDataset(self, dpData: Path) -> Dataset[de.TUImageSample]:
-		return BaseDataset(dpData, True)
+	def getTrainDataset(self, dpData: Path) -> CIFAR10Dataset:
+		return CIFAR10Dataset(dpData, isTrain=True)
 
 	@override
-	def getValDataset(self, dpData: Path) -> Dataset[de.TUImageSample]:
-		return BaseDataset(dpData, False)
+	def getValDataset(self, dpData: Path) -> CIFAR10Dataset:
+		return CIFAR10Dataset(dpData, isTrain=False)
 
 	@override
-	def getSplitFn(self) -> Callable[[de.TUImages, int], list[de.TUImages]]:
+	def getCollateFn(self) -> Callable[[list[Any]], de.TUImageBatch]:
+		return create_collate(de.TUImageBatch)
+
+	@override
+	def getSplitFn(self) -> Callable[[tc.Tensor, int], list[tc.Tensor]]:
 		return splitImage
 
 	@override
@@ -169,13 +169,18 @@ class Handler(DataHandler):
 
 
 if __name__ == '__main__':
-	dpRoot = 'data/datasets/cifar10'
-	CIFAR10(dpRoot, True, download=True)
+	from utils.data import TypedDataLoader
 
-	dsBase = BaseDataset(dpRoot, True)
-	dlTrans = TypedDataLoader[de.TUImageBatch](dsBase, 4, collate_fn=collate)
+	dpRoot = 'data/datasets/cifar10'
+	CIFAR10(dpRoot, train=True, download=True)
+
+	dsBase = CIFAR10Dataset(dpRoot, isTrain=True)
+	fn_collate = create_collate(de.TUImageBatch)
+	dlTrans = TypedDataLoader[de.TUImageBatch](dsBase, batch_size=4, collate_fn=fn_collate)
+
 	for batch in dlTrans:
-		print(batch)
+		print(f'Batch 数据形状：{batch.data.shape}, 类型：{batch.data.dtype}')
+		print(f'Batch 标签：{batch.label}')
 		break
 
 	print('运行结束！')

@@ -28,6 +28,7 @@ dev = [
 	"mkdocs-material>=9.7.1",
 	"mkdocstrings[python]>=1.0.3",
 	"mypy>=1.19.1",
+	"pytest>=9.0.3",
 ]
 
 [tool.uv.sources]

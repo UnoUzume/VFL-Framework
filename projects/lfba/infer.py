@@ -80,8 +80,8 @@ class LFBAInferCb(VFLCallback):
 		# self.iAncIdx = 1096  #! 锚样本在实际训练集中的索引
 		assert self.iAncIdx < len(dsTrain), '请选择正确的锚样本索引'
 
-		m.ns.iAncId = dsTrain[self.iAncIdx][2]  # ! 锚样本在原始训练集中的索引
-		m.ns.iTgtLabel = dsFullTrain[m.ns.iAncId][1]  # type: ignore[index]  # 目标类标签
+		m.ns.iAncId = dsTrain[self.iAncIdx].idx  # ! 锚样本在原始训练集中的索引
+		m.ns.iTgtLabel = dsFullTrain[m.ns.iAncId].label  # type: ignore[index]  # 目标类标签
 		m.logText.info(f'锚样本索引：{m.ns.iAncId}，目标类标签：{m.ns.iTgtLabel}')
 
 	@override
@@ -181,7 +181,7 @@ def inferAllClasses(
 	return tInfers, tScores
 
 
-class InferCb(VFLCallback):
+class LFBAInferAllCb(VFLCallback):
 	"""推理回调类，用于在 VFL 训练过程中进行标签推理"""
 
 	def __init__(self, rSel: float) -> None:

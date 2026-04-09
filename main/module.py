@@ -8,9 +8,9 @@ from abc import ABC, abstractmethod
 from typing import Any, override
 
 from utils.common import L, tc
-from utils.data import DataLoader
+from utils.data import TypedDataLoader
 
-LoaderType = DataLoader[Any] | list[DataLoader[Any]]
+LoaderType = TypedDataLoader[Any] | list[TypedDataLoader[Any]]
 """数据加载器的泛型类型别名"""
 
 
@@ -111,9 +111,6 @@ class DataModule(L.LightningDataModule, ABC):
 
 		如果你的模型支持推理阶段，请在子类中重写此方法。
 
-		Returns:
-			推理数据的 `DataLoader`。
-
 		Raises:
 			NotImplementedError: 默认抛出异常，提示未实现。
 		"""
@@ -126,7 +123,16 @@ class DataModule(L.LightningDataModule, ABC):
 
 	@override
 	def transfer_batch_to_device(self, batch: Any, device: tc.device, dataloader_idx: int) -> Any:
-		"""【Lightning Hook】将 Batch 数据移动到指定设备。"""
+		"""【Lightning Hook】将 Batch 数据移动到指定设备。
+
+		Args:
+			batch: 当前批次的数据。
+			device: 目标设备。
+			dataloader_idx: 数据加载器的索引。
+
+		Returns:
+			移动到设备后的数据批次。
+		"""
 		# 优先尝试调用自定义 Hook
 		custom = self.transferBatchToDevice(batch, device, dataloader_idx)
 		if custom is not None:
@@ -135,7 +141,7 @@ class DataModule(L.LightningDataModule, ABC):
 		# 如果子类没有实现（返回 None），则调用父类（Lightning）的默认逻辑
 		return super().transfer_batch_to_device(batch, device, dataloader_idx)
 
-	def transferBatchToDevice(self, batch: Any, device: tc.device, dataloader_idx: int) -> Any:  # noqa: ANN401, ARG002
+	def transferBatchToDevice(self, batch: Any, device: tc.device, idxLoader: int) -> Any:  # noqa: ANN401, ARG002, PLR6301
 		"""自定义数据传输逻辑。
 
 		如果您的 `DataLoader` 返回的是自定义数据结构（如字典、对象）而非标准 `Tensor`，
@@ -144,7 +150,7 @@ class DataModule(L.LightningDataModule, ABC):
 		Args:
 			batch: 当前批次的数据。
 			device: 目标设备（CPU/GPU）。
-			dataloader_idx: `DataLoader` 的索引。
+			idxLoader: `DataLoader` 的索引。
 
 		Returns:
 			移动到设备后的数据。如果返回 `None`，则使用 Lightning 默认传输逻辑。
@@ -153,7 +159,15 @@ class DataModule(L.LightningDataModule, ABC):
 
 	@override
 	def on_after_batch_transfer(self, batch: Any, dataloader_idx: int) -> Any:
-		"""【Lightning Hook】数据传输后的处理。"""
+		"""【Lightning Hook】数据传输后的处理。
+
+		Args:
+			batch: 已移动到设备的数据。
+			dataloader_idx: 数据加载器的索引。
+
+		Returns:
+			处理后的数据批次。
+		"""
 		# 优先尝试调用自定义 Hook
 		custom = self.onAfterBatchTransfer(batch, dataloader_idx)
 		if custom is not None:
@@ -162,14 +176,14 @@ class DataModule(L.LightningDataModule, ABC):
 		# 如果子类没有实现（返回 None），则调用父类（Lightning）的默认逻辑
 		return super().on_after_batch_transfer(batch, dataloader_idx)
 
-	def onAfterBatchTransfer(self, batch: Any, dataloader_idx: int) -> Any:  # noqa: ANN401, ARG002
+	def onAfterBatchTransfer(self, batch: Any, idxLoader: int) -> Any:  # noqa: ANN401, ARG002, PLR6301
 		"""数据传输后的增强或修改逻辑。
 
 		在此处可进行 GPU 上的数据增强（比 CPU 快）。
 
 		Args:
 			batch: 已移动到设备的数据。
-			dataloader_idx: `DataLoader` 的索引。
+			idxLoader: `DataLoader` 的索引。
 
 		Returns:
 			处理后的数据。如果返回 `None`，则不做修改。

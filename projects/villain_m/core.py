@@ -4,10 +4,23 @@ from typing import override
 
 from main.arch import BaseVFLArch
 from main.callback import VFLCallback
-from utils.common import copy, np, tc
+from utils.common import copy, tc
 from utils.config import rng
 from utils.define import StepVars
 from utils.misc import accuracy
+
+
+def sublist[T](lThis: list[T], lIndices: list[int]) -> list[T]:
+	"""根据索引列表提取原始列表中的元素。
+
+	Args:
+		lThis: 原始列表
+		lIndices: 索引列表，包含待提取元素的索引
+
+	Returns:
+		由指定索引元素构成的新列表
+	"""
+	return [lThis[i] for i in lIndices]
 
 
 def createEps(embeds: tc.Tensor, beta: float = 0.4, isAugment: bool = False) -> tc.Tensor:
@@ -24,8 +37,8 @@ def createEps(embeds: tc.Tensor, beta: float = 0.4, isAugment: bool = False) -> 
 	Returns:
 		生成的触发器向量，形状与输入嵌入特征相同
 	"""
-	embed_std = tc.std(embeds, 0)
-	_, top_indices = tc.topk(embed_std, 64)
+	embed_std = tc.std(embeds, dim=0)
+	_, top_indices = tc.topk(embed_std, k=embeds.size(dim=1) // 2)
 	# m_elements_indices = torch.argsort(embed_std, descending=True)
 
 	# if isAugment:  # * Backdoor Augmentation: Dropout
@@ -36,14 +49,14 @@ def createEps(embeds: tc.Tensor, beta: float = 0.4, isAugment: bool = False) -> 
 	mask[top_indices] = 1.0
 
 	if isAugment:  # * Backdoor Augmentation: Shifting
-		gamma = rng().uniform(0.6, 1.2)
+		gamma = rng().uniform(low=0.6, high=1.2)
 		mask *= gamma
 
 	# ? @Bai2023VILLAIN:
 	# ? the average standard deviation of elements in the backdoor dimension of all samples
-	delta = tc.std(embeds[:, top_indices], 0).mean().item()
-	# delta = tc.std(embeds[:, top_indices], 1).mean().item()
-	pattern = tc.full_like(embeds[0], delta)
+	delta: float = tc.std(embeds[:, top_indices], dim=0).mean().item()
+	# delta: float = tc.std(embeds[:, top_indices], dim=1).mean().item()
+	pattern = tc.full_like(embeds[0], fill_value=delta)
 	pattern[2::4] *= -1.0
 	pattern[3::4] *= -1.0
 
@@ -59,9 +72,10 @@ class VillainCb(VFLCallback):
 	在验证/测试阶段触发后门行为，使模型将特定输入错误分类为目标类别。
 	"""
 
-	@override
-	def onInitModule(self, m: BaseVFLArch) -> None:
-		m.logText.info(f'{self.__class__.__name__}.onInitModule()')
+	def __init__(self) -> None:
+		"""初始化实例。"""
+		self.lRPs = [1, 2, 5]
+		"""攻击节点的索引列表"""
 
 	# ============
 	# 训练阶段
@@ -69,26 +83,43 @@ class VillainCb(VFLCallback):
 
 	@override
 	def onTrainBtmIns(self, m: BaseVFLArch, v: StepVars) -> None:
-		if m.current_epoch < 7:
-			return
-		# 获取当前批次中投毒目的样本、非目标类样本的位置（索引的索引）
-		aBatchIdxs = v.indices.cpu().numpy()
-		aDstPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aDstIdxs))  #: aBatchIdxs_DstPos
-		self.aDstPos = aDstPos
-		aVicPos = np.flatnonzero(np.isin(aBatchIdxs, m.ns.aVicIdxs))  #: aBatchIdxs_VicPos
+		if m.current_epoch > 7:
+			self.switch(m, v)
 
-		if len(aDstPos) > 0 and len(aVicPos) > 0:  # 如果找到投毒目标
-			aSrcPos = rng().choice(aVicPos, len(aDstPos), len(aVicPos) < len(aDstPos))
-			for dst, src in zip(aDstPos, aSrcPos, strict=True):
-				v.lBtmIns[0][dst] = v.lBtmIns[0][src]
+	def switch(self, m: BaseVFLArch, v: StepVars) -> None:
+		"""执行样本切换。"""
+		# 获取投毒目的样本（属于目标类样本）的掩码
+		self.tDstMask = tc.isin(v.indices, m.ns.tDstIds)
+		# 获取受害类样本的掩码
+		self.tVicMask = tc.isin(v.indices, m.ns.tVicIds)
+
+		# # 在批次内部执行样本切换
+		if self.tDstMask.any() and self.tVicMask.any():
+			# 获取投毒目的样本（属于目标类样本）的位置（索引的索引）
+			[tDstPos] = tc.nonzero(self.tDstMask, as_tuple=True)
+			# 获取受害类样本的位置（索引的索引）
+			[tVicPos] = tc.nonzero(self.tVicMask, as_tuple=True)
+
+			# 方案一：有放回抽取
+			tSelect = tc.randint(high=len(tVicPos), size=(len(tDstPos),), device=m.device)
+			# 方案二：无放回抽取，但是来源样本可能少于目的样本
+			# tSelect = tc.randperm(len(tVicPos), device=m.device)[: len(tDstPos)]
+
+			# 批量样本切换
+			for idx in self.lRPs:
+				v.lBtmIns[idx][tDstPos] = v.lBtmIns[idx][tVicPos[tSelect]]
 
 	@override
 	def onTrainBtmOut(self, m: BaseVFLArch, v: StepVars) -> None:
-		if m.current_epoch < 7:
-			return
+		if m.current_epoch > 7:
+			self.poison(v)
 
-		if len(self.aDstPos) > 0:  # 如果找到投毒目标
-			v.lBtmOut[0][self.aDstPos] += createEps(v.lBtmOut[0].detach(), 1, True)
+	def poison(self, v: StepVars) -> None:
+		"""执行投毒。"""
+		if self.tDstMask.any():
+			for idx in self.lRPs:
+				eps = createEps(embeds=v.lBtmOut[idx].detach(), beta=1, isAugment=True)
+				v.lBtmOut[idx][self.tDstMask] += eps
 
 	# ============
 	# 验证阶段
@@ -101,25 +132,24 @@ class VillainCb(VFLCallback):
 	@override
 	def onValBtmOut(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		v = d['Attack']
-		v.lBtmOut[0] += createEps(v.lBtmOut[0].detach(), 2)
+		for idx in self.lRPs:
+			v.lBtmOut[idx] += createEps(embeds=v.lBtmOut[idx].detach(), beta=2)
 
 	@override
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
 		for k, v in d.items():
-			# probs = tc.nn.functional.softmax(v.zTopOut, 1)
-			# entropy = tc.distributions.Categorical(probs).entropy().mean().item()
-			# self.logDict({f'entropy/Val{k}': entropy})
+			self.logVal(m, k, v)
 
-			mask = v.labels != m.ns.iTgtLabel
-			if not mask.any():
-				continue
+	@staticmethod
+	def logVal(m: BaseVFLArch, k: str, v: StepVars) -> None:
+		"""记录验证阶段的损失。"""
+		logk = f'Val{v.iLoaderIdx}_{k}'
+		# 获取非目标类样本的掩码
+		mask = v.labels != m.ns.iTgtLabel
+		if mask.any():
+			tTgtLogits = v.zTopOut[mask]
+			tTgtLabels = tc.full_like(v.labels[mask], m.ns.iTgtLabel)
 
-			labels = v.labels[mask]
-			zTopOut = v.zTopOut[mask]
-
-			tTgtLabels = tc.full_like(labels, m.ns.iTgtLabel)
-			[accT1, accT3] = accuracy(zTopOut, tTgtLabels, (1, 3))
-			lossT = m.criterion(zTopOut, tTgtLabels)
-
-			sName = f'Val{k}/Tgt'
-			m.logDict({f'loss/{sName}': lossT, f'acc/{sName}/Top1': accT1, f'acc/{sName}/Top3': accT3})
+			loss = m.criterion(tTgtLogits, tTgtLabels)
+			[acc1, acc3] = accuracy(lprobs=tTgtLogits, target=tTgtLabels, topk=(1, 3))
+			m.logDict({f'lossTgt/{logk}': loss, f'accTgt/{logk}/Top1': acc1, f'accTgt/{logk}/Top3': acc3})
