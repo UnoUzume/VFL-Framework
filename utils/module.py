@@ -292,46 +292,15 @@ class BaseDataModule[T_Sample: de.BaseSample[Any], T_Batch: de.BaseBatch[Any]](D
 
 	@override
 	def prepare(self) -> None:
-		"""数据准备钩子。
-
-		在单节点上触发一次（不参与分布式多进程调度），常用于下载数据或提取特征。
-
-		Args:
-				无参数。
-
-		Raises:
-				RuntimeError: 如果数据底层准备或预处理失败。
-		"""
 		self.hdlr.prepare(self.dpData)
 
 	@override
 	def setup(self, stage: str) -> None:
-		"""环境设置钩子。
-
-		在每个 GPU/进程 上触发，负责将底层数据实例化挂载到内存中。
-
-		Args:
-				stage: 当前 Lightning 所处的生命周期阶段（如 'fit', 'test', 'predict'）。
-
-		Raises:
-				FileNotFoundError: 如果由于准备阶段失败导致数据文件丢失。
-		"""
 		self.dsTrain = self.hdlr.getTrainDataset(self.dpData)
 		self.dsVal = self.hdlr.getValDataset(self.dpData)
 
 	@override
 	def getTrainLoader(self) -> TypedDataLoader[T_Batch]:
-		"""获取训练数据加载器。
-
-		Args:
-				无参数。
-
-		Returns:
-				携带严谨泛型类型注解的 DataLoader 实例，能够触发 IDE 代码补全。
-
-		Raises:
-				RuntimeError: 若 setup 尚未执行导致 self.dsTrain 为空。
-		"""
 		assert self.dsTrain is not None, '必须在 setup 执行完毕后方可获取 DataLoader'
 
 		# 编程哲学 (Type Casting 作为系统边界缓冲层):
@@ -345,17 +314,6 @@ class BaseDataModule[T_Sample: de.BaseSample[Any], T_Batch: de.BaseBatch[Any]](D
 
 	@override
 	def getValLoader(self) -> TypedDataLoader[T_Batch]:
-		"""获取验证数据加载器。
-
-		Args:
-				无参数。
-
-		Returns:
-				携带严谨泛型类型注解的验证 DataLoader 实例。
-
-		Raises:
-				RuntimeError: 若 setup 尚未执行导致 self.dsVal 为空。
-		"""
 		assert self.dsVal is not None, '必须在 setup 执行完毕后方可获取 DataLoader'
 		ds_val_casted = cast('Dataset[Any]', self.dsVal)
 		return TypedDataLoader[T_Batch](
@@ -363,6 +321,7 @@ class BaseDataModule[T_Sample: de.BaseSample[Any], T_Batch: de.BaseBatch[Any]](D
 		)
 
 
+# COMPAT: 半成品工具类
 class _TransDataModule[  # pyright: ignore[reportUnusedClass]
 	T_Sample: de.BaseSample[Any],
 	T_InBatch: de.BaseBatch[Any],
@@ -397,20 +356,6 @@ class _TransDataModule[  # pyright: ignore[reportUnusedClass]
 
 	@override
 	def onAfterBatchTransfer(self, batch: T_InBatch, idxLoader: int) -> T_OutBatch:
-		"""批次转移后的拦截钩子。
-
-		此时的 Batch 已经处于目标设备 (如 CUDA) 上，在此处应用 tfCurrent 可以享受 GPU 加速。
-
-		Args:
-				batch: 从 DataLoader 弹出、已迁移至 GPU 的原始泛型批次。
-				idxLoader: 当前 DataLoader 的序号 (支持多 DataLoader 并发)。
-
-		Returns:
-				经 Transform 变换并在类型上跃迁到 T_OutBatch (已处理批次) 的强类型对象。
-
-		Raises:
-				RuntimeError: 如果在 GPU 上的 Tensor 变换操作失败。
-		"""
 		new_data = self.tfCurrent(batch.data)
 		return self.out_batch_cls(new_data, batch.label, batch.idx)
 
@@ -486,21 +431,27 @@ class SplitDataModule[
 	def onAfterBatchTransfer(
 		self, batch: T_InBatch | list[T_InBatch], idxLoader: int
 	) -> T_OutBatch | list[T_OutBatch]:
-		"""支持单源或多源 DataLoader 组合输入的批次拦截钩子。
-
-		Args:
-				batch: 从一个或多个 DataLoader 弹出的目标批次。
-				idxLoader: 当前所属 DataLoader 的序号。
-
-		Returns:
-				切分完成后的单一批次对象，或批次对象列表。
-
-		Raises:
-				RuntimeError: 切分过程或张量变换失败时抛出。
-		"""
 		if isinstance(batch, list):
 			return [self._onAfterBatchTransfer(b) for b in batch]
 		return self._onAfterBatchTransfer(batch)
 
 
-__all__ = ['BaseDataModule', 'DataConfig', 'DataHandler', 'SplitDataModule']
+class UImageSplitDataModule(
+	SplitDataModule[de.TUImageSample, de.TUImageBatch, de.TImageSplitBatch]
+):
+	"""专用于图像 VFL 场景的数据模块。"""
+
+
+class FeatureSplitDataModule(
+	SplitDataModule[de.TFeatureSample, de.TFeatureBatch, de.TFeatureSplitBatch]
+):
+	"""专用于 1D 特征 VFL 场景的数据模块。"""
+
+
+__all__ = [
+	'BaseDataModule',
+	'DataConfig',
+	'DataHandler',
+	'SplitDataModule',
+	'UImageSplitDataModule',
+]

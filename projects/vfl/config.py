@@ -245,7 +245,7 @@ class AppConfig:
 
 	def __post_init__(self, _dpRoot: Path | None) -> None:
 		"""初始化实例。"""
-		self.dpRoot = _dpRoot or Path('data/logs') / f'{self.sName}_{self.data.sName}'
+		self.dpRoot = _dpRoot or Path('data/logs') / f'{self.sName}-{self.data.sName}'
 
 	def getRunName(self) -> str:
 		"""生成唯一的实验运行名称。

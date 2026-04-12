@@ -7,7 +7,7 @@ from main.callback import OPT_TYPE, VFLCallback
 from models.fcn import FCN
 from projects.vfl.config import AppConfig
 from utils.common import F, nn, tc
-from utils.define import StepVars, TSplitImageBatch
+from utils.define import StepVars, TImageSplitBatch
 from utils.misc import accuracy
 
 
@@ -44,7 +44,7 @@ class SoftLabelCb(VFLCallback):
 
 	@override
 	def onTrainStepVars(self, m: BaseVFLArch, v: StepVars) -> None:
-		uAuxBatch: TSplitImageBatch = v.raw[1]  # ! 来自辅助数据集
+		uAuxBatch: TImageSplitBatch = v.raw[1]  # ! 来自辅助数据集
 		self.tAuxLabels = uAuxBatch.label
 		v.images[0] = tc.cat([v.images[0], uAuxBatch.image[0]], 0)
 

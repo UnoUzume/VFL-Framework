@@ -74,6 +74,6 @@ if __name__ == '__main__':
 		app = AppConfig(data, model, run, fpCkpt=None)
 
 		# 开始实验
-		main(app=app)
+		main(app)
 
 	print('运行结束！')

@@ -159,6 +159,7 @@ class BaseDataset[T_Sample: de.BaseSample[Any]](Dataset[T_Sample], ABC):
 		return len(self.data) if self.data is not None else 0
 
 
+# COMPAT: 半成品工具类
 class _TransDataset[T_InSample: de.BaseSample[Any], T_OutSample: de.BaseSample[Any]](  # pyright: ignore[reportUnusedClass]
 	Dataset[T_OutSample]
 ):
@@ -210,6 +211,7 @@ class _TransDataset[T_InSample: de.BaseSample[Any], T_OutSample: de.BaseSample[A
 		return len(self.dataset)
 
 
+# COMPAT: 半成品工具类
 class _SplitDataset[T_InSample: de.BaseSample[Any], T_OutSample: de.BaseSample[Any]](  # pyright: ignore[reportUnusedClass]
 	Dataset[T_OutSample], ABC
 ):

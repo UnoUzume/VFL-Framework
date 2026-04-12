@@ -95,7 +95,7 @@ class TFImageSample(BaseSample[TFImage]):
 
 
 @typechecker
-class TFSplitImageSample(BaseSample[list[TFImage]]):
+class TFImageSplitSample(BaseSample[list[TFImage]]):
 	"""已分割且已处理的 PyTorch 图像单样本数据类（面向联邦学习）。
 
 	继承自泛型 `BaseSample`，其核心 `data` 属性被严格约束为 `list[TFImage]`
@@ -125,7 +125,7 @@ class TFImageBatch(BaseBatch[TFImages]):
 
 
 @typechecker
-class TSplitImageBatch(BaseBatch[list[TUImages | TFImages]]):
+class TImageSplitBatch(BaseBatch[list[TUImages | TFImages]]):
 	"""已分割的 PyTorch 图像批次数据类（面向联邦学习）。
 
 	继承自泛型 `BaseBatch`，其核心 `data` 属性被约束为 `list[TUImages | TFImages]`
@@ -156,7 +156,7 @@ class TFeatureBatch(BaseBatch[TFeatures]):
 
 
 @typechecker
-class TSplitFeatureBatch(BaseBatch[list[TFeatures]]):
+class TFeatureSplitBatch(BaseBatch[list[TFeatures]]):
 	"""已分割的一维特征批次数据类（面向垂直联邦学习 VFL）。
 
 	继承自泛型 `BaseBatch`，其核心 `data` 属性被约束为 `list[TFeatures]`
@@ -198,7 +198,7 @@ class StepVars:
 
 	raw: Any
 	"""原始批次数据"""
-	batch: TSplitImageBatch
+	batch: TImageSplitBatch
 	"""已分割批次数据"""
 	iBatchIdx: int
 	"""批次索引"""
@@ -210,7 +210,7 @@ class StepVars:
 	"""批量标签"""
 	indices: Int64[tc.Tensor, ' b'] = field(default_factory=defaultTensor)
 	"""批量索引"""
-	lBtmIns: list[TFImages] = field(default_factory=list)
+	lBtmIns: list[tc.Tensor] = field(default_factory=list)
 	"""本地模型输入"""
 	lBtmOut: list[tc.Tensor] = field(default_factory=list)
 	"""本地模型输出"""

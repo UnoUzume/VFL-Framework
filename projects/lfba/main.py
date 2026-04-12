@@ -1,66 +1,77 @@
-"""LFBA 实验主程序模块
-
-本模块实现了 LFBA 实验流程，包括数据加载、模型训练和验证等功能。
-"""
+"""LFBA 攻击实验主模块"""
 
 import time
 
-from projects.vfl.config import AppConfig, ModelConfig, RunConfig
+from torch.optim import AdamW
+
+from main.arch import BaseVFLArch
+from main.callback import OPT_TYPE
+from projects.vfl.config import AppConfig, ModelConfig, RunConfig, createLRS
 from projects.vfl.core import VFLArch
+from projects.vflip.method import VFLIPCb
 from utils.common import L
 from utils.config import getCallbacks, init
-from utils.module import DataConfig, SplitDataModule
+from utils.module import DataConfig, UImageSplitDataModule
 
 from .core import LFBACb
-from .method import LFBAInferCb
+from .infer import LFBAInferCb
 
 
-def main(lTopDims: list[int]) -> None:
-	"""运行 LFBA 实验主函数
+def configOptims(m: BaseVFLArch, lr: float) -> OPT_TYPE:
+	"""配置优化器和学习率调度器。
 
-	Args:
-		lTopDims: 顶层网络结构维度列表
+	Returns:
+		优化器和学习率调度器列表
 	"""
-	# 配置
-	data = DataConfig('cifar10', 128, 4, enableTrans=False)
-	model = ModelConfig([128, 128], lTopDims)
-	run = RunConfig(0.001, 40)
-	app = AppConfig(data, model, run, fpCkpt=None)
+	optBtms = [AdamW(net.parameters(), lr=lr) for net in m.lBtmNets]
+	optTop = AdamW(m.zTopNet.parameters(), lr=lr)
 
+	lrsBtms = [createLRS(opt, milestones=[5, 10, 20, 30], gamma=0.3) for opt in optBtms]
+	lrsTop = createLRS(optTop, milestones=[5, 10, 20, 30], gamma=0.3)
+	return [*optBtms, optTop], [*lrsBtms, lrsTop]
+
+
+def main(app: AppConfig) -> None:
+	"""进行实验。"""
 	# 模型架构
 	arch = VFLArch(
-		app,
-		[
-			LFBAInferCb(1096, 0.08, 0.70, 0.03),
+		config=app,
+		lCallbacks=[
+			LFBAInferCb(iAncIdx=1096, rTgt=0.08, rVic=0.70, rSel=0.03),
 			LFBACb(),
+			VFLIPCb(dpRoot=app.dpRoot, lPartyDims=app.model.lPartyDims, M=0.03, N=0.02),
 		],
 	)
 
 	# 数据模块
-	module = SplitDataModule(len(model.lPartyDims), data)
+	module = UImageSplitDataModule(nParty=len(app.model.lPartyDims), config=app.data)
 
+	# 训练器
 	trainer = L.Trainer(
 		deterministic=True,
 		max_epochs=arch.cfg.run.epochs,
 		default_root_dir=arch.cfg.dpRoot,
+		log_every_n_steps=30,
 		callbacks=getCallbacks(),
 	)
-	trainer.fit(arch, datamodule=module, ckpt_path=app.fpCkpt)
-	trainer.validate(arch, datamodule=module, ckpt_path='best')
+	trainer.fit(model=arch, datamodule=module, ckpt_path=app.fpCkpt)
+	trainer.validate(model=arch, datamodule=module, ckpt_path='best')
 
 
 if __name__ == '__main__':
-	lSeed = [int(time.time())]
-	llDims = [
-		# [256, 10],
-		[256, 256, 10],
-		# [256, 256, 256, 10],
-		# [256, 256, 256, 256, 10],
-	]
+	iSeed = int(time.time())
+	lSeeds = [iSeed + i for i in range(3)]
+	for seed in lSeeds:
+		# 设置随机种子
+		init(seed)
 
-	for lDims in llDims:
-		for seed in lSeed:
-			init(seed)
-			main(lDims)
+		# 设置实验参数
+		data = DataConfig(sName='cifar10', nBatchSize=1024, nWorkers=16, enableTrans=False)
+		model = ModelConfig(lPartyDims=[64] * 4, lTopDims=[256, 256, 10])
+		run = RunConfig(lr=1e-3, epochs=40, _configOptims=configOptims)
+		app = AppConfig(data, model, run, fpCkpt=None)
+
+		# 开始实验
+		main(app)
 
 	print('运行结束！')

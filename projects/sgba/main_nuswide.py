@@ -28,8 +28,8 @@ def configOptims(m: BaseVFLArch, lr: float) -> OPT_TYPE:
 	optBtms = [AdamW(net.parameters(), lr=lr) for net in m.lBtmNets]
 	optTop = AdamW(m.zTopNet.parameters(), lr=lr)
 
-	lrsBtms = [createLRS(opt, milestones=[5,10, 20,30], gamma=0.4) for opt in optBtms]
-	lrsTop = createLRS(optTop, milestones=[5,  10, 20,30], gamma=0.4)
+	lrsBtms = [createLRS(opt, milestones=[5, 10, 20, 30], gamma=0.4) for opt in optBtms]
+	lrsTop = createLRS(optTop, milestones=[5, 10, 20, 30], gamma=0.4)
 	return [*optBtms, optTop], [*lrsBtms, lrsTop]
 
 
@@ -51,7 +51,7 @@ def getBtmNets() -> nn.ModuleList:
 		各参与方的底端网络模块列表
 	"""
 	lInputDims = get_vfl_dims(1634, 4)
-	return nn.ModuleList([FCN([dim, 256,256, 64]) for dim in lInputDims])
+	return nn.ModuleList([FCN([dim, 256, 256, 64]) for dim in lInputDims])
 
 
 def main(app: AppConfig, args: MethodArgs) -> None:
@@ -67,7 +67,7 @@ def main(app: AppConfig, args: MethodArgs) -> None:
 	)
 
 	# 数据模块
-	module = SplitDataModule[de.TFeatureSample, de.TFeatureBatch, de.TSplitFeatureBatch](
+	module = SplitDataModule[de.TFeatureSample, de.TFeatureBatch, de.TFeatureSplitBatch](
 		nParty=len(app.model.lPartyDims), config=app.data
 	)
 
@@ -101,7 +101,7 @@ if __name__ == '__main__':
 
 		# 设置实验参数
 		data = DataConfig(sName='nuswide', nBatchSize=1024, nWorkers=16, enableTrans=False)
-		model = ModelConfig(lPartyDims=[64] * 4, lTopDims=[256, 256, 10],_getBtmNets=getBtmNets)
+		model = ModelConfig(lPartyDims=[64] * 4, lTopDims=[256, 256, 10], _getBtmNets=getBtmNets)
 		run = RunConfig(lr=1e-3, epochs=40, _configOptims=configOptims)
 		app = AppConfig(data, model, run, fpCkpt=None)
 

@@ -141,6 +141,7 @@ class DataModule(L.LightningDataModule, ABC):
 		# 如果子类没有实现（返回 None），则调用父类（Lightning）的默认逻辑
 		return super().transfer_batch_to_device(batch, device, dataloader_idx)
 
+	# COMPAT: 基类需要保持灵活性
 	def transferBatchToDevice(self, batch: Any, device: tc.device, idxLoader: int) -> Any:  # noqa: ANN401, ARG002, PLR6301
 		"""自定义数据传输逻辑。
 
@@ -176,6 +177,7 @@ class DataModule(L.LightningDataModule, ABC):
 		# 如果子类没有实现（返回 None），则调用父类（Lightning）的默认逻辑
 		return super().on_after_batch_transfer(batch, dataloader_idx)
 
+	# COMPAT: 基类需要保持灵活性
 	def onAfterBatchTransfer(self, batch: Any, idxLoader: int) -> Any:  # noqa: ANN401, ARG002, PLR6301
 		"""数据传输后的增强或修改逻辑。
 

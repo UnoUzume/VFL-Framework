@@ -1,4 +1,4 @@
-"""Villain 攻击实验主模块"""
+"""LFBA 攻击实验主模块"""
 
 import time
 
@@ -7,16 +7,29 @@ from torch.optim import AdamW
 from main.arch import BaseVFLArch
 from main.callback import OPT_TYPE
 from models.fcn import FCN
-from projects.lfba.infer import LFBAInferCb
 from projects.vfl.config import AppConfig, ModelConfig, RunConfig, createLRS
 from projects.vfl.core import VFLArch
 from projects.vflip.method import VFLIPCb
-from utils import define as de
 from utils.common import L, nn
 from utils.config import getCallbacks, init
-from utils.module import DataConfig, SplitDataModule
+from utils.module import DataConfig, UImageSplitDataModule
 
-from .core import VillainCb
+from .core_nuswide import LFBACb
+from .infer import LFBAInferCb
+
+
+def getBtmNets() -> nn.ModuleList:
+	"""获取各参与方的底端网络列表。
+
+	Returns:
+		各参与方的底端网络模块列表
+	"""
+	total = 1634
+	n = 4
+	base = total // n
+	rem = total % n
+	lDims = [base + (1 if i < rem else 0) for i in range(n)]
+	return nn.ModuleList([FCN([dim, 256, 256, 64]) for dim in lDims])
 
 
 def configOptims(m: BaseVFLArch, lr: float) -> OPT_TYPE:
@@ -28,30 +41,9 @@ def configOptims(m: BaseVFLArch, lr: float) -> OPT_TYPE:
 	optBtms = [AdamW(net.parameters(), lr=lr) for net in m.lBtmNets]
 	optTop = AdamW(m.zTopNet.parameters(), lr=lr)
 
-	lrsBtms = [createLRS(opt, milestones=[5, 20], gamma=0.4) for opt in optBtms]
-	lrsTop = createLRS(optTop, milestones=[5, 20], gamma=0.4)
+	lrsBtms = [createLRS(opt, milestones=[5, 10, 20, 30], gamma=0.3) for opt in optBtms]
+	lrsTop = createLRS(optTop, milestones=[5, 10, 20, 30], gamma=0.3)
 	return [*optBtms, optTop], [*lrsBtms, lrsTop]
-
-
-def get_vfl_dims(total: int, n: int) -> list[int]:
-	"""获取 VFL 每一方的维度分布。
-
-	Returns:
-		维度分布
-	"""
-	base = total // n
-	rem = total % n
-	return [base + (1 if i < rem else 0) for i in range(n)]
-
-
-def getBtmNets() -> nn.ModuleList:
-	"""获取各参与方的底端网络列表。
-
-	Returns:
-		各参与方的底端网络模块列表
-	"""
-	lInputDims = get_vfl_dims(1634, 4)
-	return nn.ModuleList([FCN([dim, 256, 256, 64]) for dim in lInputDims])
 
 
 def main(app: AppConfig) -> None:
@@ -61,15 +53,13 @@ def main(app: AppConfig) -> None:
 		config=app,
 		lCallbacks=[
 			LFBAInferCb(iAncIdx=1096, rTgt=0.08, rVic=0.70, rSel=0.03),
-			VillainCb(),
-			VFLIPCb(dpRoot=app.dpRoot, lPartyDims=app.model.lPartyDims, M=0.05, N=0.05),
+			LFBACb(),
+			VFLIPCb(dpRoot=app.dpRoot, lPartyDims=app.model.lPartyDims, M=0.03, N=0.02),
 		],
 	)
 
 	# 数据模块
-	module = SplitDataModule[de.TFeatureSample, de.TFeatureBatch, de.TFeatureSplitBatch](
-		nParty=len(app.model.lPartyDims), config=app.data
-	)
+	module = UImageSplitDataModule(nParty=len(app.model.lPartyDims), config=app.data)
 
 	# 训练器
 	trainer = L.Trainer(
@@ -97,6 +87,6 @@ if __name__ == '__main__':
 		app = AppConfig(data, model, run, fpCkpt=None)
 
 		# 开始实验
-		main(app=app)
+		main(app)
 
 	print('运行结束！')

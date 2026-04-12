@@ -7,9 +7,6 @@ from main.callback import VFLCallback
 from utils.common import copy, tc
 from utils.define import StepVars
 from utils.misc import accuracy
-from utils.vision import createPostTrans, createSpatialTrans
-
-from .method import AddTrigger
 
 
 class LFBACb(VFLCallback):
@@ -25,19 +22,9 @@ class LFBACb(VFLCallback):
 	# ============
 
 	@override
-	def onFitStart(self, m: BaseVFLArch) -> None:
-		# 数据转换
-		self.tfNormal = createSpatialTrans(m.module.lNormalTrans)
-		self.tfAugment = createSpatialTrans(m.module.lAugmentTrans)
-		self.tfTrigger = AddTrigger()
-		self.tfPost = createPostTrans()
-
-	@override
 	def onTrainBtmIns(self, m: BaseVFLArch, v: StepVars) -> None:
-		v.lBtmIns = [self.tfAugment(images) for images in v.lBtmIns]
 		if m.current_epoch >= 1:
 			self.switch(m, v)
-		v.lBtmIns = [self.tfPost(images) for images in v.lBtmIns]
 
 	def switch(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""执行样本切换。"""
@@ -59,7 +46,9 @@ class LFBACb(VFLCallback):
 			# tSelect = tc.randperm(n=len(tVicPos), device=m.device)[: len(tDstPos)]
 
 			# 批量样本切换
-			v.lBtmIns[self.iRP][tDstPos] = self.tfTrigger(v.lBtmIns[self.iRP][tVicPos][tSelect])
+			v.lBtmIns[self.iRP][tDstPos] = v.lBtmIns[self.iRP][tVicPos][tSelect]
+			v.lBtmIns[self.iRP] = v.lBtmIns[self.iRP].clone()
+			v.lBtmIns[self.iRP][tDstPos][:, :10] = 1
 
 	# ============
 	# 验证阶段
@@ -71,14 +60,9 @@ class LFBACb(VFLCallback):
 
 	@override
 	def onValBtmIns(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:
-		v = d['Origin']
-		v.lBtmIns = [self.tfNormal(images) for images in v.lBtmIns]
-		v.lBtmIns = [self.tfPost(images) for images in v.lBtmIns]
-
 		v = d['Attack']
-		v.lBtmIns = [self.tfNormal(images) for images in v.lBtmIns]
-		v.lBtmIns[self.iRP] = self.tfTrigger(v.lBtmIns[self.iRP])
-		v.lBtmIns = [self.tfPost(images) for images in v.lBtmIns]
+		v.lBtmIns[self.iRP] = v.lBtmIns[self.iRP].clone()
+		v.lBtmIns[self.iRP][:, :10] = 1
 
 	@override
 	def onValLoss(self, m: BaseVFLArch, d: dict[str, StepVars]) -> None:

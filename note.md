@@ -75,3 +75,230 @@
 
 - **专用的测试脚本 (pytest)**：负责断言边界条件、检查异常抛出、集成 CI/CD 流水线，是项目的**质量防线**。
 - **文件底部的 `__main__`**：只放最精简的、Happy Path（理想路径）下的实例化和打印代码，用于提供**快速调试的脚手架和示例**。
+
+## 每次使用 SplitDataModule 都需要传入三个泛型参数，怎么优化
+
+每次实例化都要写一长串 `SplitDataModule[A, B, C]` 确实非常破坏代码的美感，也违背了 DRY（Don't Repeat Yourself）原则。在真实的工程实践中，由于数据模态（图像、1D 特征、音频）的组合是非常固定的，我们完全可以将其“固化”下来。
+
+在 Python 3.12 的现代类型系统中，有两套非常优雅的方案可以彻底消除这种冗余：
+
+### 方案一：使用 Python 3.12 的新语法 `type` 声明类型别名（最推荐）
+
+这是最轻量、最符合你当前架构风格的做法。你可以直接在 `define.py`（或者 `module.py` 的底部）将固定的泛型组合定义为一个新的**类型别名 (Type Alias)**。
+
+**1. 在定义文件中声明别名：**
+
+```python
+# utils/define.py (或 module.py)
+from utils.module import SplitDataModule
+
+# 为 1D 特征场景定义专属别名
+type FeatureSplitDataModule = SplitDataModule[
+    TFeatureSample,
+    TFeatureBatch,
+    TSplitFeatureBatch
+]
+
+# 为图像场景定义专属别名
+type ImageSplitDataModule = SplitDataModule[
+    TUImageSample,
+    TUImageBatch,
+    TSplitImageBatch
+]
+```
+
+**2. 在外部脚本中的使用体验：**
+
+非常清爽，Mypy 静态检查和 IDE 智能补全依然完美生效，且无需再写任何中括号：
+
+```python
+# train.py
+from utils.define import FeatureSplitDataModule
+
+# 直接使用别名实例化，Mypy 完全能够推断底层的所有泛型契约
+vfl_datamodule = FeatureSplitDataModule(
+    nParty=3,
+    config=config
+)
+```
+
+---
+
+### 方案二：通过“空子类化”绑定泛型参数（面向对象的进阶玩法）
+
+如果你觉得类型别名在某些调试场景下打印出来的类名依然是 `<class 'utils.module.SplitDataModule'>` 不太直观，或者你预见到未来不同模态的 DataModule 可能需要稍微不同的生命周期 Hook（比如图像切分后需要特殊的内存释放逻辑），你可以直接继承并绑定泛型。
+
+**1. 定义具体子类：**
+
+```python
+# modules/vfl_modules.py (新建一个文件专门放这些具体实现，或者直接放 module.py 里)
+from utils.module import SplitDataModule
+from utils import define as de
+
+class ImageSplitDataModule(SplitDataModule[de.TUImageSample, de.TUImageBatch, de.TSplitImageBatch]):
+    """专用于图像 VFL 场景的数据模块。"""
+    pass  # 目前不需要加任何逻辑，纯粹为了固定类型
+
+class FeatureSplitDataModule(SplitDataModule[de.TFeatureSample, de.TFeatureBatch, de.TSplitFeatureBatch]):
+    """专用于 1D 特征 VFL 场景的数据模块。"""
+    pass
+```
+
+**2. 使用体验：**
+
+```python
+# train.py
+from modules.vfl_modules import ImageSplitDataModule
+
+vfl_datamodule = ImageSplitDataModule(nParty=4, config=config)
+
+# 额外的好处：支持 isinstance 检查，有利于写复杂的路由逻辑
+if isinstance(vfl_datamodule, ImageSplitDataModule):
+    print("当前正在处理图像数据")
+```
+
+### 总结与建议
+
+- **选方案一 (Type Alias)**：如果你的 `SplitDataModule` 逻辑已经极度完善，所有模态的数据行为完全一致，仅仅是为了少打几个字和安抚 Mypy，方案一最简单干净。
+- **选方案二 (Subclassing)**：如果你希望代码具有更强的面向对象拓展性，且希望运行时 `type(vfl_datamodule)` 能清晰地显示具体的业务类名（在排查复杂的大型训练任务崩溃时很有用），那么建议采用方案二。
+
+这样优化后，外层的训练启动脚本 (`train.py`) 就彻底与底层的泛型实现细节解耦了。
+
+## "TypeAliasType" not callable
+
+这是我的失误，非常抱歉！你在尝试运行上一轮推荐的“方案一”时遇到了这个报错，这直接暴露了 Python 3.12 `type` 语法（PEP 695）的一个关键底层机制。
+
+### 为什么会报错？
+
+在 Python 3.12 中，当你使用 `type FeatureSplitDataModule = ...` 定义别名时，Python 在底层创建了一个 `typing.TypeAliasType` 对象。
+
+**这个对象纯粹是为静态类型检查（Mypy/Pyright）和 IDE 补全设计的。它在运行时（Runtime）没有 `__call__` 方法，因此它不是一个真正的类构造器，无法被实例化（Not Callable）。**
+
+你不能像往常一样直接调用它：`vfl_datamodule = FeatureSplitDataModule(nParty=3)`，这就会触发你看到的 TypeError。
+
+---
+
+### 正确的修复方案
+
+这里为你提供两种解决路径，取决于你对代码美感的偏好：
+
+#### 路径一：修正 `type` 别名的用法（注解与实例分离）
+
+如果你想保留 `type` 别名的轻量感，你必须在物理上将**静态类型注解**和**运行时实例化**分开：
+
+```python
+# train.py
+from utils.define import FeatureSplitDataModule
+from utils.module import SplitDataModule
+
+# 左侧冒号：使用别名（安抚 Mypy 和提供 IDE 补全）
+# 右侧等号：使用原始类名进行实例化（Python 运行时需要真正的类）
+vfl_datamodule: FeatureSplitDataModule = SplitDataModule(
+    nParty=3,
+    config=config
+)
+```
+
+#### 路径二：直接切换为“空子类化”（强烈推荐）
+
+如果你觉得上面这种“左右两边写不同名字”的做法并没有真正达到让你少写代码的初衷，那么请毫不犹豫地放弃 `type` 别名，改用传统的**空子类化**。
+
+对于需要真正在运行时被频繁实例化的模块来说，这种方式是最稳妥、也是最符合直觉的：
+
+```python
+# utils/vfl_modules.py
+from utils.module import SplitDataModule
+from utils import define as de
+
+class FeatureSplitDataModule(SplitDataModule[de.TFeatureSample, de.TFeatureBatch, de.TSplitFeatureBatch]):
+    """专用于 1D 特征 VFL 场景的数据模块。"""
+    pass
+
+
+# train.py
+from utils.vfl_modules import FeatureSplitDataModule
+
+# 子类是一个真正的 Class，可以直接无缝实例化，且内部泛型已被完美锁定！
+vfl_datamodule = FeatureSplitDataModule(nParty=3, config=config)
+```
+
+在工程实践中，对于纯粹的数据结构标注（如 `type ImageMatrix = np.ndarray`），我们用 `type` 别名；但对于 `DataModule` 这种生命周期庞大的实体对象，**子类化（路径二）**是兼顾类型安全和运行时调用体验的最佳选择。建议你直接采用路径二来进行重构。
+
+## 总结一下 mypy、ruff、pyright 在代码行关闭特定警告的方法
+
+在现代 Python 工程中，同时引入多个静态分析工具（如 Mypy 查类型、Ruff 查规范、Pyright 作为 LSP 补充）是非常普遍的架构选择。但这也常常导致不同工具在特定代码行“神仙打架”。
+
+为了保持代码的严谨性，**强烈建议永远只关闭特定的规则（精准压制）**，而不是使用全局的 `# type: ignore` 或 `# noqa`，这会导致真正的 Bug 被静默屏蔽。
+
+以下是这三款工具在**单行代码**级别精准关闭特定警告的标准语法总结：
+
+### 1. Ruff (代码规范与 Linter)
+
+Ruff 继承了 Flake8 的语法，使用 `noqa` (No Quality Assurance) 关键字，后跟具体的字母数字规则代码。
+
+- **语法：** `# noqa: <CODE1>, <CODE2>`
+- **规则代码风格：** 大写字母 + 数字（如 `E501`, `F401`, `ARG002`）
+
+**示例：**
+
+```python
+import os  # noqa: F401  # 压制 "Unused import" 警告
+
+def process(data: Any, unused_param: int):  # noqa: ARG001, ANN401
+    pass # 同时压制 "未使用参数" 和 "Any 类型" 警告
+```
+
+### 2. Mypy (官方标准类型检查器)
+
+Mypy 使用特定的 `type: ignore` 注释，并通过方括号 `[]` 传入具体的错误代码字符串。
+
+- **语法：** `# type: ignore[<error-code1>, <error-code2>]`
+- **规则代码风格：** 小写字母与中划线（如 `attr-defined`, `assignment`, `no-any-return`）
+- _注意：必须在 Mypy 配置文件中开启 `show_error_codes = true` 才能在报错信息中看到这些中括号内的代码。_
+
+**示例：**
+
+```python
+x: int = "hello"  # type: ignore[assignment]  # 仅压制赋值类型不匹配
+
+def get_data() -> int:
+    return "not an int"  # type: ignore[return-value]
+```
+
+### 3. Pyright / Pylance (微软系高性能类型检查器)
+
+Pyright 的压制语法与 Mypy 类似，但关键字是 `pyright: ignore`，且它的错误代码命名风格具有鲜明的“微软味”。
+
+- **语法：** `# pyright: ignore[<reportRule1>, <reportRule2>]`
+- **规则代码风格：** `report` 开头的驼峰命名法（如 `reportGeneralTypeIssues`, `reportUnknownMemberType`）
+
+**示例：**
+
+```python
+import missing_module  # pyright: ignore[reportMissingImports]
+
+x = 1
+x.append(2)  # pyright: ignore[reportAttributeAccessIssue]
+```
+
+---
+
+### 💡 高阶技巧：多工具同源混用 (Inline Combination)
+
+在实际的业务逻辑中（特别是像之前讨论的 PyTorch Lightning 的 Hook 重写中），你经常需要在同一行同时安抚这三个工具。
+
+Python 的注释解析机制允许你将它们**写在同一行**，只需用空格隔开即可，各个工具的正则解析器会自动抓取属于自己的指令：
+
+```python
+# 一次性安抚三个静态分析器
+def transferBatchToDevice(self, batch: Any, device: tc.device) -> Any:  # type: ignore[override]  # noqa: ARG002, PLR6301  # pyright: ignore[reportIncompatibleMethodOverride]
+    return None
+```
+
+**速查对比表：**
+
+| 工具        | 核心职责     | 忽略关键字          | 规则代码容器     | 规则代码格式示例              |
+| :---------- | :----------- | :------------------ | :--------------- | :---------------------------- |
+| **Ruff**    | 代码规范检查 | `# noqa:`           | 冒号后逗号分隔   | `F401`, `PLR6301`             |
+| **Mypy**    | 基础类型检查 | `# type: ignore`    | 方括号 `[]` 包裹 | `[override, assignment]`      |
+| **Pyright** | 强类型与 LSP | `# pyright: ignore` | 方括号 `[]` 包裹 | `[reportUnknownVariableType]` |

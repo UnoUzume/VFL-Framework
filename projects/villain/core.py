@@ -53,11 +53,7 @@ def createEps(embeds: tc.Tensor, beta: float = 0.4, isAugment: bool = False) -> 
 
 
 class VillainCb(VFLCallback):
-	"""VILLAIN 攻击实现，一种针对垂直联邦学习的后门攻击方法
-
-	该回调类实现了 VILLAIN 攻击的核心逻辑，包括在训练阶段向嵌入特征中注入后门触发器，
-	在验证/测试阶段触发后门行为，使模型将特定输入错误分类为目标类别。
-	"""
+	"""VILLAIN 攻击回调类"""
 
 	def __init__(self) -> None:
 		"""初始化实例。"""
@@ -75,14 +71,14 @@ class VillainCb(VFLCallback):
 
 	def switch(self, m: BaseVFLArch, v: StepVars) -> None:
 		"""执行样本切换。"""
-		# 获取投毒目的样本（属于目标类样本）的掩码
+		# 获取目标类样本中投毒目的样本的掩码
 		self.tDstMask = tc.isin(v.indices, m.ns.tDstIds)
 		# 获取受害类样本的掩码
 		self.tVicMask = tc.isin(v.indices, m.ns.tVicIds)
 
-		# # 在批次内部执行样本切换
+		# 在批次内部执行样本切换
 		if self.tDstMask.any() and self.tVicMask.any():
-			# 获取投毒目的样本（属于目标类样本）的位置（索引的索引）
+			# 获取目标类样本中投毒目的样本的位置（索引的索引）
 			[tDstPos] = tc.nonzero(self.tDstMask, as_tuple=True)
 			# 获取受害类样本的位置（索引的索引）
 			[tVicPos] = tc.nonzero(self.tVicMask, as_tuple=True)

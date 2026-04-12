@@ -67,7 +67,7 @@ def main(app: AppConfig) -> None:
 	)
 
 	# 数据模块
-	module = SplitDataModule[de.TFeatureSample, de.TFeatureBatch, de.TSplitFeatureBatch](
+	module = SplitDataModule[de.TFeatureSample, de.TFeatureBatch, de.TFeatureSplitBatch](
 		nParty=len(app.model.lPartyDims), config=app.data
 	)
 
@@ -92,7 +92,7 @@ if __name__ == '__main__':
 
 		# 设置实验参数
 		data = DataConfig(sName='nuswide', nBatchSize=1024, nWorkers=16, enableTrans=False)
-		model = ModelConfig(lPartyDims=[64] * 8, lTopDims=[512, 256, 10],_getBtmNets=getBtmNets)
+		model = ModelConfig(lPartyDims=[64] * 8, lTopDims=[512, 256, 10], _getBtmNets=getBtmNets)
 		run = RunConfig(lr=1e-3, epochs=40, _configOptims=configOptims)
 		app = AppConfig(data, model, run, fpCkpt=None)
 

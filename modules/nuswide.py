@@ -1,4 +1,4 @@
-"""NUS-WIDE 数据集处理模块 (面向联邦学习 1D 异构特征)。
+"""NUS-WIDE 数据集模块
 
 该模块提供了 NUS-WIDE 预处理特征数据集的加载、切分和分发功能。
 由于底层数据是拼接好的 1634 维多模态特征向量，此模块展示了泛型架构
@@ -24,14 +24,14 @@ from utils.vision import Transform
 
 
 class NUSWIDEDataset(BaseDataset[de.TFeatureSample]):
-	"""NUS-WIDE 特征数据集类。
+	"""NUS-WIDE 数据集类
 
 	继承自泛型的 `BaseDataset`，负责将预处理好的 `.npy` 矩阵加载至内存，
 	并严格转换为 PyTorch Tensor，最后封装为强类型的 `TUFeatureSample`。
 	"""
 
 	def __init__(self, dpRoot: Path | str, isTrain: bool) -> None:
-		"""初始化 NUS-WIDE 数据集实例。
+		"""初始化实例。
 
 		编程哲学 (Fail-Fast 快速失败机制):
 				在初始化阶段即执行文件的存在性校验，并立即执行 numpy 到 Tensor 的转换。
@@ -62,16 +62,6 @@ class NUSWIDEDataset(BaseDataset[de.TFeatureSample]):
 
 	@override
 	def make_sample(self, data: tc.Tensor, label: int, idx: int) -> de.TFeatureSample:
-		"""实例化具体的特征样本数据类。
-
-		Args:
-				data: 单个核心 1D 特征数据 (tc.Tensor)。
-				label: 数据对应的单标签。
-				idx: 样本在数据集中的全局索引。
-
-		Returns:
-				组装完毕的强类型特征样本实例。
-		"""
 		return de.TFeatureSample(data=data, label=label, idx=idx)
 
 
@@ -122,7 +112,7 @@ def _splitFeature(data: tc.Tensor, nParty: int) -> list[tc.Tensor]:
 
 
 class Handler(DataHandler[de.TFeatureSample]):
-	"""NUS-WIDE 数据集的核心处理程序。
+	"""NUS-WIDE 数据集的核心处理程序
 
 	隐式实现了 `DataHandler[de.TUFeatureSample]` 协议。
 	负责对外提供数据集的路径、构造器、拆分算法及组装函数的实例。
@@ -135,7 +125,6 @@ class Handler(DataHandler[de.TFeatureSample]):
 	@property
 	@override
 	def dpPath(self) -> Path:
-		# 注意：此处路径需与你集中式预处理脚本生成的输出路径对齐
 		return Path('data/datasets/NUS-WIDE/processed')
 
 	@override
@@ -162,8 +151,8 @@ class Handler(DataHandler[de.TFeatureSample]):
 		return _splitFeature
 
 	@override
-	def getSplitBatchCls(self) -> Callable[[list[Any], tc.Tensor, tc.Tensor], de.TSplitFeatureBatch]:
-		return de.TSplitFeatureBatch
+	def getSplitBatchCls(self) -> Callable[[list[Any], tc.Tensor, tc.Tensor], de.TFeatureSplitBatch]:
+		return de.TFeatureSplitBatch
 
 	@override
 	def getAugmentTrans(self, nParty: int = 1) -> list[Transform]:

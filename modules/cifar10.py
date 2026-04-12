@@ -1,8 +1,4 @@
-"""CIFAR-10 数据集处理模块。
-
-该模块提供了 CIFAR-10 数据集的加载、预处理和分发功能，
-用于联邦学习场景下的图像分类任务。
-"""
+"""CIFAR-10 数据集模块"""
 
 from collections.abc import Callable
 from typing import Any, override
@@ -19,11 +15,7 @@ from utils.vision import Transform, tf
 
 
 class CIFAR10Dataset(BaseDataset[de.TUImageSample]):
-	"""CIFAR-10 数据集类。
-
-	继承自泛型的 `BaseDataset`，在初始化时一次性将数据挂载为 Tensor，
-	消除 DataLoader 运行时的重复格式转换开销。
-	"""
+	"""CIFAR-10 数据集类"""
 
 	def __init__(self, dpRoot: Path | str, isTrain: bool) -> None:
 		"""初始化实例。
@@ -44,16 +36,6 @@ class CIFAR10Dataset(BaseDataset[de.TUImageSample]):
 
 	@override
 	def make_sample(self, data: tc.Tensor, label: int, idx: int) -> de.TUImageSample:
-		"""组装强类型的图像样本实例。
-
-		Args:
-				data: 单个核心图像数据 (tc.Tensor, 格式为 uint8)。
-				label: 数据标签。
-				idx: 样本索引。
-
-		Returns:
-				符合 TUImageSample 定义的强类型样本。
-		"""
 		return de.TUImageSample(data=data, label=label, idx=idx)
 
 
@@ -83,8 +65,8 @@ def splitImage(data: de.TUImages, nParty: int) -> list[de.TUImages]:
 	if nParty == 4:
 		return [
 			data[..., :16, :16],  # 左上角
-			data[..., 16:, :16],  # 左下角
 			data[..., :16, 16:],  # 右上角
+			data[..., 16:, :16],  # 左下角
 			data[..., 16:, 16:],  # 右下角
 		]
 	if nParty == 8:
@@ -128,10 +110,7 @@ def getAugmentTrans(nParty: int = 1) -> list[Transform]:
 
 
 class Handler(DataHandler[de.TUImageSample]):
-	"""CIFAR-10 数据集的核心处理程序。
-
-	实现 `DataHandler` 协议，提供 CIFAR-10 数据集的路径、构造器及组装函数的实例。
-	"""
+	"""CIFAR-10 数据集的核心处理程序"""
 
 	@property
 	@override
@@ -158,6 +137,10 @@ class Handler(DataHandler[de.TUImageSample]):
 	@override
 	def getSplitFn(self) -> Callable[[tc.Tensor, int], list[tc.Tensor]]:
 		return splitImage
+
+	@override
+	def getSplitBatchCls(self) -> Callable[[list[Any], tc.Tensor, tc.Tensor], de.TImageSplitBatch]:
+		return de.TImageSplitBatch
 
 	@override
 	def getAugmentTrans(self, nParty: int = 1) -> list[Transform]:
